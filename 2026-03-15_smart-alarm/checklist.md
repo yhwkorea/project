@@ -3,7 +3,7 @@
 **작성일**: 2026-03-15
 **작성자**: threat-modeler
 **기반**: DFD Level 1 + STRIDE 위협 분석
-**상태**: 초안
+**상태**: 진행 중
 
 ---
 
@@ -16,8 +16,10 @@
 - [~] IN_PROGRESS: FR-002 목적지 등록 화면 구현 (단일 목적지 텍스트 입력 구현됨, 지도 핀·최대 5개 미구현)
 - [x] DONE: FR-003 목적지별 도착 목표 시각 설정 UI 구현 (TimePicker — 시/분 드롭다운)
 - [x] DONE: FR-004 준비 시간 슬라이더 구현 (10~90분, 기본값 30분)
+- [x] DONE: FR-004 여유시간(bufferMinutes) 필드 추가 (DB migration v2→v3, UI 슬라이더 1~30분)
 - [x] DONE: FR-005 모니터링 시작 시각 설정 UI 구현
 - [x] DONE: FR-006 요일별 알람 활성화/비활성화 토글 UI 구현
+- [x] DONE: FR-006 CalculateWakeTimeUseCase 다음 활성 요일 탐색 로직 구현
 - [~] IN_PROGRESS: FR-001~006 설정 데이터 Room DB AlarmProfile 테이블에 저장 (암호화 미적용)
 
 ### [경로 계산 — FR-010~015]
@@ -28,9 +30,13 @@
 - [x] DONE: FR-012 도보 구간 거리·소요 시간 경로 계산에 포함
 - [x] DONE: FR-013 이동수단별 경로 탭 UI — 도보/버스/지하철/버스+지하철 4가지 탭, 각 탭 총 이동시간 표시, 사용자가 선택한 경로 기준으로 알람 설정
 - [x] DONE: FR-014 D2D 총 소요 시간 계산 로직 구현 (준비시간 + 도보 + 대기 + 이동)
+- [x] DONE: FR-014 previewWakeMinutes bufferMinutes 반영 + 실시간 재계산 구현
 - [x] DONE: FR-015 실시간 소요 시간 N분 간격 재계산 WorkManager PeriodicWork 구현 (TrafficMonitorWorker)
+- [x] DONE: FR-015 TrafficMonitorWorker OneTimeWork 스케줄링 — 도착 N분 전 1회 예약 + 3분마다 재실행
 - [x] DONE: FR-016 경로 지도 보기 — "지도 보기" 버튼 → Google Maps WebView (출발지→목적지 대중교통 경로)
-- [x] DONE: FR-017 새벽 운행 중단 안내 — ODsay 에러 코드(-8, -98) 시 "이 시간대에 운행하는 대중교통이 없어요" 메시지
+- [x] DONE: FR-016 경로 확인 필수화 — 저장 전 validation (미확인 시 저장 불가)
+- [x] DONE: FR-016 지금 출발 시 도착 예정 표시 (leaveNowArrivalMs) 구현
+- [x] DONE: FR-017 새벽 운행 중단 필터 — 00:30~05:30 transit 제외 (ODsay 에러 코드(-8, -98) 시 "이 시간대에 운행하는 대중교통이 없어요" 메시지)
 
 ### [실시간 교통 정보 — FR-020~023]
 
@@ -38,6 +44,8 @@
 - [!] FAILED: FR-020 서울열린데이터광장 버스 실시간 API — openapi.seoul.go.kr:8088 KEY 오류, ws.bus.go.kr는 data.go.kr 별도 키 필요
 - [~] IN_PROGRESS: FR-021 서울열린데이터광장 지하철 실시간 운행 정보 조회 (swopenAPI.seoul.go.kr 연동 코드 구현, 키 유효 확인됨)
 - [ ] TODO: FR-022 교통 정체 정보 조회 및 도보 경로 우회 반영 (SHOULD)
+- [x] DONE: FR-023 OpenWeatherMap API 연동 — 비/눈/뇌우 감지 시 이동시간 배수 적용 구현
+- [ ] TODO: FR-023 날씨 API 테스팅 (키 활성화 대기 중)
 - [ ] TODO: FR-023 기상청 단기예보 API + 초단기실황 API 연동 구현
 - [ ] TODO: FR-023 강수량(mm) 단계별 계수 적용 로직 구현
   - 0mm: 계수 1.0 (기본)
@@ -49,11 +57,12 @@
 ### [알림 시스템 — FR-030~036]
 
 - [x] DONE: FR-030 기상 알람 로컬 알림 구현 (AlarmManager.setExactAndAllowWhileIdle + RingtoneManager.TYPE_ALARM + FLAG_INSISTENT)
+- [x] DONE: FR-030 AlarmReceiver 후 다음 날 모니터링 재예약 로직 구현
 - [ ] TODO: FR-030 SCHEDULE_EXACT_ALARM 권한 런타임 요청 흐름 구현 (Android 12+)
 - [x] DONE: FR-031 교통 상황 변화 감지 시 재알림 발송 로직 구현 (TrafficMonitorWorker → AlarmScheduler.reschedule)
 - [ ] TODO: FR-032 재알림에 변경된 출발 시각 + 변경 원인 텍스트 포함
 - [ ] TODO: FR-033 전날 밤 우천 예보 사전 알림 구현 (SHOULD)
-- [ ] TODO: FR-034 최적 출발 시각 경과 경고 알림 구현 (SHOULD)
+- [x] DONE: FR-034 모니터링 중 기상시각 경과 시 즉시 발화 로직 구현
 - [ ] TODO: FR-035 알림음·진동·팝업 커스터마이징 설정 UI (COULD)
 - [ ] TODO: FR-036 스누즈 후 재계산 재알림 구현 (SHOULD)
 - [x] DONE: FCM 미사용 확인 — 모든 알림이 로컬(WorkManager + AlarmManager)로 구현됨
@@ -85,6 +94,10 @@
 - [ ] TODO: NFR-020 Doze 모드 대응 — WorkManager Constraints + setRequiresCharging/Idle 조건 설정
 - [ ] TODO: NFR-021 모니터링 비활성화 시간대 네트워크 요청 중단 로직 구현
 - [ ] TODO: NFR-022 응답 캐싱 전략 구현 (OkHttp Cache + Room 캐시, 캐시 TTL 5분)
+
+### [E2E 테스트]
+
+- [ ] TODO: 알람 발화 E2E 테스트
 
 ---
 
