@@ -2,7 +2,7 @@
 
 **작성일**: 2026-03-15
 **작성자**: requirements-analyst
-**상태**: UPDATED — 2026-03-16 (2차)
+**상태**: UPDATED — 2026-03-16 (3차) — Google Maps Directions API 연동 요구사항 추가
 
 ---
 
@@ -16,6 +16,8 @@
 6. [기술 스택 제안](#6-기술-스택-제안)
 7. [제약 조건](#7-제약-조건)
 8. [미결 사항](#8-미결-사항)
+9. [결정 이력](#9-결정-이력)
+10. [Google Maps Directions API 연동 — 신규 기능 요구사항](#10-google-maps-directions-api-연동--신규-기능-요구사항)
 
 ---
 
@@ -364,6 +366,8 @@ Data Sources
 | TBD-008 | 지하철 + 버스 혼용 경로에서 두 API의 시각 불일치 처리 방식? | HIGH | **UPDATED**: 경로 계산 API(**ODsay Lab**) 값을 주(primary), 서울열린데이터광장 실시간 API를 보조로 사용 (TBD-004 결정에 따라 Tmap → ODsay로 변경) |
 | TBD-009 | ~~앱 내 지도 경로 시각화 필요 여부? (경로를 지도 위에 그리기)~~ | LOW | **RESOLVED**: FR-016으로 구현 — 경로 미리보기 카드에서 "지도 보기" 버튼 → Google Maps WebView로 출발지/목적지 표시 |
 | TBD-010 | 다중 사용자 계정(가족 공유 등) 기능 필요 여부? | LOW | MVP 범위 외로 제외 |
+| TBD-011 | Google Maps Directions API 사용 전략: ODsay 완전 대체 vs 병행? | HIGH | **RESOLVED**: 섹션 10 참고 — Hybrid 전략(Google 주, ODsay fallback) 채택 |
+| TBD-012 | Google Maps Directions API 월 비용 초과 시 대응 방안? | HIGH | 섹션 10.6 참고 — ODsay fallback 자동 전환 + 사용량 모니터링 경고 |
 
 ---
 
@@ -391,7 +395,215 @@ Data Sources
 | 2026-03-16 (2차) | FR-037/037b/037c 신규 | 모니터링 스케줄링 — PeriodicWork 제거, OneTimeWork 기반. 도착 - monitoringStartMinutes 시각에 1회 예약, 3분마다 재실행, AlarmReceiver 후 다음 날 재예약 |
 | 2026-03-16 (2차) | FR-038/038b/038c 신규 | CalculateWakeTimeUseCase — 과거 시각 시 다음 활성 요일 탐색, 모니터링 중 과거면 +3초 즉시 발화, bufferMinutes 반영한 previewWakeMinutes 즉시 재계산 |
 | 2026-03-16 (2차) | NFR-002 수정 | 모니터링 갱신 주기 5분 → 3분으로 변경 (FR-037b 반영) |
+| 2026-03-16 (3차) | TBD-011 해소 | Google Maps Directions API 연동 전략 확정 — Hybrid(Google 주, ODsay fallback). 섹션 10 신규 추가 |
 
 ---
 
-*다음 단계: threat-modeler 투입 (DFD + STRIDE + checklist.md 작성) — requirements-reviewer 검토 완료*
+## 10. Google Maps Directions API 연동 — 신규 기능 요구사항
+
+> **작성일**: 2026-03-16 (3차)
+> **작성자**: requirements-analyst
+> **관련 기존 요구사항**: FR-010~FR-015, FR-017~FR-018, NFR-010, NFR-041
+
+---
+
+### 10.1 ODsay 완전 대체 vs 병행 사용 — 결정
+
+**결론: Hybrid 전략 채택 — Google Directions를 주 실시간 소스, ODsay를 fallback으로 운용**
+
+#### 비교 분석
+
+| 기준 | ODsay Lab API | Google Maps Directions API |
+|------|---------------|---------------------------|
+| 실시간성 | 정적 스케줄 기반 (실시간 현황 제한) | 실제 버스/지하철 현황 반영 (`departure_time` 기반) |
+| 한국 대중교통 커버리지 | 우수 (국내 전용, 서울 버스·지하철 통합) | 양호 (서울 주요 노선 지원, 일부 소규모 노선 누락 가능) |
+| 비용 | 무료 (일 1,000회) | 월 $200 크레딧 (약 4만 건), 초과 시 1,000건당 $5 |
+| 응답 포맷 | ODsay 고유 포맷 (한국어 노선 정보 풍부) | Google 표준 JSON (`legs[].steps[]`) |
+| 새벽 운행 중단 처리 | 에러 코드(-8, -98) 반환 → FR-017 필터 | `departure_time` 범위 밖이면 응답 없거나 다른 날 시각 반환 → 앱 레벨 필터 여전히 필요 |
+| 장애 리스크 | Google 대비 안정성 낮음, 소규모 서비스 | Google 인프라, SLA 보장, 전 세계 스케일 |
+
+#### 채택 전략
+
+```
+[RouteRepository 호출 순서]
+1순위: Google Maps Directions API (실시간 교통 현황 반영)
+2순위: ODsay Lab API (Google 실패 시 자동 fallback)
+3순위: 로컬 캐시 (두 API 모두 실패 시, NFR-010 준수)
+```
+
+**근거**:
+- Google Directions는 실시간 버스/지하철 현황을 반영하여 기상 시각 계산 정확도를 높인다.
+- ODsay는 완전 제거하지 않고 fallback으로 유지 → 비용 급증 방어 + API 장애 대응.
+- 완전 대체 시 ODsay의 한국어 노선 정보(정류장명, 노선 코드 등)가 소실되어 FR-032 재알림 메시지 품질 저하 우려.
+
+---
+
+### 10.2 Google Directions API 응답 → RouteType 매핑
+
+기존 `RouteType` enum(WALK / BUS / SUBWAY / BUS_SUBWAY)을 그대로 유지하며, Google API 응답 필드로 매핑한다.
+
+#### 매핑 규칙
+
+```
+Google Directions API 응답 필드: legs[].steps[].travel_mode + transit_details.line.vehicle.type
+
+travel_mode = "WALKING"
+  → RouteType.WALK
+
+travel_mode = "TRANSIT"
+  + vehicle.type = "BUS"
+  → RouteType.BUS
+
+travel_mode = "TRANSIT"
+  + vehicle.type IN ["SUBWAY", "HEAVY_RAIL", "COMMUTER_TRAIN", "METRO_RAIL"]
+  → RouteType.SUBWAY
+
+travel_mode = "TRANSIT" (복수 steps 내 BUS + SUBWAY 혼재)
+  → RouteType.BUS_SUBWAY
+
+매핑 불가 vehicle.type (FERRY, CABLE_CAR 등)
+  → RouteType.WALK로 fallback + 로그 기록
+```
+
+#### 구현 위치
+
+- 신규 클래스: `GoogleDirectionsMapper` — Google 응답 DTO → 도메인 `RouteInfo` + `RouteType` 변환 담당
+- 기존 `OdsayRouteMapper`와 동일한 출력 타입(`RouteInfo`) 반환 → Repository 상위 레이어 변경 없음
+
+---
+
+### 10.3 API 키 관리
+
+#### 요구사항 (NFR-041 확장)
+
+| ID | 요구사항 | 우선순위 |
+|----|----------|----------|
+| FR-060 | Google Maps Directions API 키는 `local.properties`에 `GOOGLE_MAPS_API_KEY=...` 형식으로 저장하고, `secrets-gradle-plugin`(com.google.android.libraries.mapsplatform.secrets-gradle-plugin)을 통해 `BuildConfig.GOOGLE_MAPS_API_KEY`로 주입한다. | MUST |
+| FR-061 | `local.properties`는 `.gitignore`에 포함되어 Git에 커밋되지 않아야 한다. CI/CD 환경에서는 환경 변수로 주입한다. | MUST |
+| FR-062 | Google Cloud Console에서 API 키에 Android 앱 제한(패키지명 + SHA-1 지문)을 설정하여 키 무단 사용을 방지한다. | MUST |
+| FR-063 | Google Maps Directions API 사용량을 Google Cloud Monitoring에서 모니터링하고, 월 크레딧($200) 80% 도달 시 알림을 설정한다. | SHOULD |
+
+---
+
+### 10.4 실패 시 Fallback 전략
+
+#### Fallback 흐름도
+
+```
+TrafficMonitorWorker / RouteRepository.getRoute()
+    │
+    ▼
+[1] Google Maps Directions API 호출
+    │
+    ├─ 성공 → RouteInfo 반환 (실시간 현황 반영)
+    │
+    └─ 실패 (HTTP 4xx/5xx, timeout, quota 초과)
+         │
+         ▼
+        [2] ODsay Lab API 호출 (기존 로직)
+             │
+             ├─ 성공 → RouteInfo 반환 + UI에 "실시간 정보 제한" 배지 표시
+             │
+             └─ 실패
+                  │
+                  ▼
+                 [3] 로컬 캐시 (Room DB 최근 RouteInfo)
+                      │
+                      ├─ 캐시 있음 → RouteInfo 반환 + UI에 "캐시 데이터" 경고 표시 (NFR-010)
+                      │
+                      └─ 캐시 없음 → 사용자에게 "경로 조회 실패" 에러 표시, 알람 비활성화 안내
+```
+
+#### 요구사항
+
+| ID | 요구사항 | 우선순위 |
+|----|----------|----------|
+| FR-064 | Google Directions API 호출 실패 시 자동으로 ODsay API로 전환하고, 전환 여부를 UI에 표시한다. | MUST |
+| FR-065 | Google API quota 초과(HTTP 429) 시 해당 모니터링 사이클에서 ODsay로 즉시 전환하며, 다음 사이클에서 Google API를 재시도한다. | MUST |
+| FR-066 | fallback 발생 시 로그를 기록하여 추후 비용/장애 분석에 활용한다. | SHOULD |
+
+---
+
+### 10.5 기존 RouteRepositoryImpl 변경 범위
+
+#### 현재 구조 (변경 전)
+
+```
+RouteRepositoryImpl
+  └── OdsayDataSource (단일 데이터소스)
+```
+
+#### 변경 후 구조
+
+```
+RouteRepository (interface — 변경 없음)
+    │
+RouteRepositoryImpl (변경)
+  ├── GoogleDirectionsDataSource (신규)  ← 1순위
+  └── OdsayDataSource (기존 유지)         ← 2순위 fallback
+```
+
+#### 변경 범위 상세
+
+| 구성요소 | 변경 유형 | 내용 |
+|---------|----------|------|
+| `RouteRepository` (interface) | 변경 없음 | 기존 계약 유지 |
+| `RouteRepositoryImpl` | 수정 | `GoogleDirectionsDataSource` 주입 추가, fallback 로직 추가 (10~20줄 내외) |
+| `OdsayDataSource` | 변경 없음 | fallback으로 그대로 유지 |
+| `GoogleDirectionsDataSource` | 신규 추가 | Retrofit 인터페이스 + Google Directions REST API 호출 |
+| `GoogleDirectionsMapper` | 신규 추가 | Google 응답 DTO → `RouteInfo` + `RouteType` 변환 |
+| `GoogleDirectionsDto` | 신규 추가 | Google Directions API 응답 데이터 클래스 |
+| `TrafficMonitorWorker` | 변경 없음 | `RouteRepository` 인터페이스만 사용하므로 내부 변경 없음 |
+| `AlarmScheduler` | 변경 없음 | `RouteInfo` 도메인 모델만 사용하므로 내부 변경 없음 |
+
+**핵심 원칙**: `RouteRepository` 인터페이스 계약을 유지하므로 UseCase 레이어 이상(ViewModel, Worker)은 변경 없음.
+
+---
+
+### 10.6 새벽 운행 중단 필터 — Google API 처리 여부 분석
+
+#### 분석 결과
+
+Google Maps Directions API는 `departure_time` 파라미터를 받지만, 새벽 운행 중단 시간대(00:30~05:30)에 대해 다음과 같이 동작한다:
+
+- **운행 중단 시간대 요청 시**: 응답이 없거나(no routes), 당일 이른 아침 첫 차 시각으로 응답을 반환할 수 있음 — 앱이 기대하는 "해당 시간대 경로 없음" 에러를 명시적으로 반환하지 않음.
+- **ODsay와 차이**: ODsay는 에러 코드 -8(-98) 반환 → FR-017 처리 가능. Google은 잘못된 경로를 정상 응답으로 반환할 수 있어 앱 레벨 필터가 필수.
+
+#### 결론: FR-018 필터 로직 반드시 유지
+
+| ID | 요구사항 | 우선순위 |
+|----|----------|----------|
+| FR-018 (유지) | 새벽 00:30~05:30 시간대는 Google/ODsay API 호출 이전에 앱 레벨에서 먼저 대중교통 경로를 차단하고 WALK만 반환한다. Google API 전환 후에도 이 필터는 제거하지 않는다. | MUST |
+| FR-067 | Google Directions API 응답에서 `departure_time`이 요청 시각과 1시간 이상 차이나는 경우(첫 차 시각 반환으로 간주), 해당 응답을 무효 처리하고 ODsay fallback을 시도한다. | MUST |
+
+---
+
+### 10.7 비용 관리 요구사항
+
+| ID | 요구사항 | 우선순위 |
+|----|----------|----------|
+| FR-068 | Google Directions API 호출은 TrafficMonitorWorker의 3분 주기 재계산 외에는 발생하지 않도록 한다. (UI 탭 전환, 화면 회전 등으로 중복 호출 금지 — ViewModel 캐시 활용) | MUST |
+| FR-069 | 동일 출발지·목적지·시각(±5분) 조건의 경로 응답은 Room DB에 5분간 캐시하여 중복 API 호출을 방지한다. | MUST |
+| FR-070 | 월 Google API 호출 횟수를 앱 내 디버그 화면 또는 로그로 추적할 수 있어야 한다. (개발/테스트 목적) | SHOULD |
+
+---
+
+### 10.8 신규 요구사항 ID 요약
+
+| ID | 분류 | 내용 | 우선순위 |
+|----|------|------|----------|
+| FR-060 | API 키 관리 | secrets-gradle-plugin + BuildConfig 주입 | MUST |
+| FR-061 | API 키 관리 | local.properties gitignore + CI 환경변수 | MUST |
+| FR-062 | API 키 보안 | Google Cloud 앱 제한 (패키지명 + SHA-1) | MUST |
+| FR-063 | 비용 모니터링 | 월 크레딧 80% 알림 설정 | SHOULD |
+| FR-064 | Fallback | Google 실패 시 ODsay 자동 전환 + UI 표시 | MUST |
+| FR-065 | Fallback | quota 초과(429) 시 즉시 ODsay 전환, 다음 사이클 재시도 | MUST |
+| FR-066 | Fallback | fallback 발생 시 로그 기록 | SHOULD |
+| FR-067 | 운행 시간 필터 | Google 응답 departure_time 이상 감지 시 무효 처리 | MUST |
+| FR-068 | 비용 관리 | 중복 호출 방지 (ViewModel 캐시) | MUST |
+| FR-069 | 비용 관리 | 동일 조건 경로 5분 캐시 (Room DB) | MUST |
+| FR-070 | 비용 모니터링 | 월 호출 횟수 추적 (디버그) | SHOULD |
+
+---
+
+*다음 단계: threat-modeler 투입 — Google Directions API 연동에 따른 DFD 업데이트 + STRIDE 재분석 (특히 API 키 노출, 비용 DoS 공격 위협 추가)*
