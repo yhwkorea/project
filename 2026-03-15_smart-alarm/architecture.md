@@ -1,6 +1,7 @@
 # architecture.md — 스마트 교통 알람 설계 문서
 
 **작성일**: 2026-03-15
+**최종 수정**: 2026-03-16
 **작성자**: threat-modeler
 **기반**: requirements.md (CONFIRMED) + Clean Architecture + DFD Level 1
 
@@ -8,26 +9,42 @@
 
 ## 목차
 
-1. [컴포넌트 구성 (Clean Architecture)](#1-컴포넌트-구성-clean-architecture)
-2. [주요 데이터 흐름 (DFD Level 1)](#2-주요-데이터-흐름-dfd-level-1)
-3. [외부 API 연동 구조](#3-외부-api-연동-구조)
-4. [WorkManager 백그라운드 작업 설계](#4-workmanager-백그라운드-작업-설계)
-5. [핵심 데이터 모델](#5-핵심-데이터-모델)
-6. [보안 설계 결정](#6-보안-설계-결정)
+1. [기술 스택](#1-기술-스택)
+2. [컴포넌트 구성 (Clean Architecture)](#2-컴포넌트-구성-clean-architecture)
+3. [알람 생명주기](#3-알람-생명주기)
+4. [주요 데이터 흐름 (DFD Level 1)](#4-주요-데이터-흐름-dfd-level-1)
+5. [외부 API 연동 구조](#5-외부-api-연동-구조)
+6. [경로 미리보기](#6-경로-미리보기)
+7. [WorkManager 백그라운드 작업 설계](#7-workmanager-백그라운드-작업-설계)
+8. [핵심 데이터 모델](#8-핵심-데이터-모델)
+9. [DB 마이그레이션](#9-db-마이그레이션)
+10. [보안 설계 결정](#10-보안-설계-결정)
+11. [모듈 구조 (패키지)](#11-모듈-구조-패키지)
 
 ---
 
-## 1. 컴포넌트 구성 (Clean Architecture)
+## 1. 기술 스택
+
+| 분류 | 기술 |
+|------|------|
+| 플랫폼 | Android, Kotlin |
+| UI | Jetpack Compose |
+| DI | Hilt |
+| DB | Room v3 |
+| 백그라운드 | WorkManager, AlarmManager |
+
+---
+
+## 2. 컴포넌트 구성 (Clean Architecture)
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                  Presentation Layer                  │
 │  ┌──────────────────┐   ┌─────────────────────────┐ │
 │  │  Compose UI       │   │  ViewModel (StateFlow)  │ │
-│  │  - OnboardingFlow │◄──│  - AlarmViewModel       │ │
-│  │  - HomeScreen     │   │  - RouteViewModel       │ │
-│  │  - RouteScreen    │   │  - SettingsViewModel    │ │
-│  │  - SettingsScreen │   └────────────┬────────────┘ │
+│  │  - HomeScreen     │◄──│  - HomeViewModel        │ │
+│  │  - AlarmEditScreen│   │  - AlarmEditViewModel   │ │
+│  │  - RouteMapScreen │   └────────────┬────────────┘ │
 │  └──────────────────┘                │               │
 └─────────────────────────────────────┼───────────────┘
                                        │ UseCase 호출
@@ -35,15 +52,13 @@
 │                  Domain Layer        │               │
 │  ┌──────────────────────────────────▼─────────────┐ │
 │  │                   UseCases                      │ │
-│  │  - CalculateRouteUseCase                        │ │
-│  │  - MonitorTrafficUseCase                        │ │
-│  │  - ScheduleAlarmUseCase                         │ │
-│  │  - DetectArrivalUseCase                         │ │
-│  │  - ApplyWeatherCorrectionUseCase                │ │
+│  │  - CalculateWakeTimeUseCase                     │ │
+│  │  - GetOptimalRouteUseCase                       │ │
 │  └──────────────────────────────────┬─────────────┘ │
 │  ┌──────────────────────────────────▼─────────────┐ │
 │  │              Domain Models (순수 Kotlin)         │ │
-│  │  AlarmProfile / Route / TransitInfo / Weather   │ │
+│  │  AlarmProfile / Route / RouteType /             │ │
+│  │  RouteSegment                                   │ │
 │  └─────────────────────────────────────────────────┘ │
 └─────────────────────────────────────┼───────────────┘
                                        │ Repository 인터페이스
@@ -51,26 +66,25 @@
 │                   Data Layer         │               │
 │  ┌──────────────────────────────────▼─────────────┐ │
 │  │                 Repositories                    │ │
-│  │  - AlarmRepository    - RouteRepository         │ │
-│  │  - TrafficRepository  - WeatherRepository       │ │
-│  │  - LocationRepository - HistoryRepository       │ │
+│  │  - RouteRepositoryImpl  - AlarmRepositoryImpl  │ │
 │  └────────────┬──────────────────────┬────────────┘ │
 │               │                      │               │
 │  ┌────────────▼──────────┐ ┌─────────▼────────────┐ │
 │  │    Remote DataSources  │ │  Local DataSources    │ │
-│  │  - OdsayApiService     │ │  - AlarmDao (Room)    │ │
-│  │  - TmapApiService      │ │  - RouteDao (Room)    │ │
-│  │  - SeoulBusApiService  │ │  - HistoryDao (Room)  │ │
-│  │  - SubwayApiService    │ │  - SettingsDataStore  │ │
-│  │  - WeatherApiService   │ │                       │ │
+│  │  - OdsayApi            │ │  - AppDatabase (Room) │ │
+│  │  - SeoulBusApi         │ │    (AlarmDao 등)       │ │
+│  │  - SeoulSubwayApi      │ │                       │ │
+│  │  - WeatherApi          │ │                       │ │
+│  │    (OpenWeatherMap)    │ │                       │ │
 │  └───────────────────────┘ └───────────────────────┘ │
 │                                                       │
 │  ┌───────────────────────────────────────────────┐   │
-│  │          Background Layer (WorkManager)        │   │
-│  │  - TrafficMonitorWorker (5분/1분 주기)           │   │
-│  │  - WeatherCheckWorker (3시간 주기)               │   │
-│  │  - AlarmSchedulerWorker (정각 알람 예약)          │   │
-│  │  - GeofencingManager (GPS 도착 감지)             │   │
+│  │        Background / Alarm Layer               │   │
+│  │  - TrafficMonitorWorker                       │   │
+│  │  - RescheduleAlarmsWorker                     │   │
+│  │  - AlarmScheduler                             │   │
+│  │  - AlarmReceiver                              │   │
+│  │  - BootReceiver                               │   │
 │  └───────────────────────────────────────────────┘   │
 └───────────────────────────────────────────────────────┘
 ```
@@ -84,7 +98,33 @@ Presentation → Domain ← Data
 
 ---
 
-## 2. 주요 데이터 흐름 (DFD Level 1)
+## 3. 알람 생명주기
+
+```
+저장
+  → CalculateWakeTimeUseCase (다음 활성요일 탐색)
+  → AlarmScheduler.schedule(wakeTime)
+  → TrafficMonitorWorker.scheduleNextMonitoring(profile)
+      → OneTimeWork at (arrivalTime - monitoringStartMinutes)
+
+모니터링 시작
+  → RouteRepository.getOptimalRoute() [ODsay + 새벽필터]
+  → WeatherApi.getCurrentWeather() → travelMultiplier 적용
+  → AlarmScheduler.schedule(adjustedWakeTime)
+  → 도착 전이면 3분 후 재실행
+  → 기상시각 경과 시 즉시 발화(+3초)
+
+알람 발화
+  → AlarmReceiver → 알림 표시
+  → RescheduleAlarmsWorker → 다음 날 모니터링 재예약
+
+재부팅
+  → BootReceiver → RescheduleAlarmsWorker
+```
+
+---
+
+## 4. 주요 데이터 흐름 (DFD Level 1)
 
 ```
 ┌─────────────┐
@@ -96,43 +136,45 @@ Presentation → Domain ← Data
 │                  스마트 알람 앱                   │
 │                                                  │
 │  [1. 설정 저장]                                  │
-│   사용자 입력 → SettingsViewModel                │
-│              → AlarmRepository                   │
-│              → Room DB (AlarmProfile 저장)       │
+│   사용자 입력 → AlarmEditViewModel               │
+│              → AlarmRepositoryImpl               │
+│              → AppDatabase (AlarmProfile 저장)   │
 │                                                  │
 │  [2. 경로 계산]                                  │
-│   ScheduleAlarmUseCase                           │
-│   → ODsay API (출발지+목적지 → 경로 후보 목록)    │
-│   → RouteRepository → Room DB (캐시 저장)        │
-│   → D2D 총 소요시간 계산                         │
-│   → 기상 보정 (WeatherRepository → 기상청 API)   │
-│   → AlarmManager 기상 알람 예약                  │
+│   CalculateWakeTimeUseCase                       │
+│   → GetOptimalRouteUseCase                       │
+│   → OdsayApi (출발지+목적지 → 경로 후보 목록)     │
+│   → 새벽 운행 중단 필터 (departureMin 30..329)    │
+│   → RouteRepositoryImpl → AppDatabase (캐시)     │
+│   → WeatherApi.getCurrentWeather()               │
+│   → travelMultiplier 적용 → wakeTime 계산        │
+│   → AlarmScheduler.schedule(wakeTime)            │
 │                                                  │
-│  [3. 실시간 모니터링]  ← WorkManager 5분 주기    │
+│  [3. 실시간 모니터링]  ← OneTimeWork 트리거       │
 │   TrafficMonitorWorker                           │
-│   → ODsay API (현재 경로 소요시간 재계산)         │
-│   → 서울 버스 API (타야 할 버스 도착 정보)         │
-│   → 서울 지하철 API (지연 여부 확인)              │
-│   → 변경 감지 → ScheduleAlarmUseCase 재계산      │
-│   → 변경 있음 → 재알림 NotificationCompat        │
+│   → OdsayApi (현재 경로 소요시간 재계산)           │
+│   → SeoulBusApi (타야 할 버스 도착 정보)           │
+│   → SeoulSubwayApi (지연 여부 확인)              │
+│   → WeatherApi → travelMultiplier 재적용         │
+│   → AlarmScheduler.schedule(adjustedWakeTime)    │
+│   → 도착 전이면 3분 후 재실행                    │
+│   → 기상시각 경과 시 즉시 발화(+3초)              │
 │                                                  │
-│  [4. 알람 발생]                                  │
-│   AlarmManager → BroadcastReceiver               │
-│   → AlarmActivity (전체화면 알림)                 │
-│   → 로컬 알림 (NotificationCompat)               │
+│  [4. 알람 발화]                                  │
+│   AlarmManager → AlarmReceiver                   │
+│   → 알림 표시                                    │
+│   → RescheduleAlarmsWorker → 다음 날 재예약       │
 │                                                  │
-│  [5. 도착 감지]                                  │
-│   Geofencing API → GeofenceReceiver              │
-│   → GEOFENCE_TRANSITION_DWELL 이벤트             │
-│   → HistoryRepository → 실제 도착 시각 기록       │
-│   → 모니터링 비활성화                            │
+│  [5. 재부팅 복구]                                 │
+│   BootReceiver → RescheduleAlarmsWorker          │
 └─────────────────────────────────────────────────┘
        │                    │
        ▼                    ▼
 ┌────────────┐    ┌──────────────────────────────┐
 │  로컬 알림  │    │       외부 API                │
 │ (기기 내)  │    │  ODsay Lab / 서울 버스 API /   │
-└────────────┘    │  서울 지하철 API / 기상청 API  │
+└────────────┘    │  서울 지하철 API /             │
+                  │  OpenWeatherMap               │
                   └──────────────────────────────┘
 ```
 
@@ -140,238 +182,194 @@ Presentation → Domain ← Data
 
 ---
 
-## 3. 외부 API 연동 구조
+## 5. 외부 API 연동 구조
 
-### 3.1 API 역할 분담
+### 5.1 API 역할 분담
 
-| API | 역할 | 호출 시점 | 한도 |
-|-----|------|----------|------|
-| **ODsay Lab** (주) | 대중교통 경로 계산, 환승 정보, 실시간 도착 | 경로 계산, 모니터링 갱신 | 일 1,000회 무료 |
-| **Tmap** (보조) | ODsay 한도 초과 시 경로 계산 폴백 | ODsay 호출 실패/한도 초과 시 | 별도 |
-| **서울열린데이터광장 버스 API** | 서울 버스 실시간 도착 (직접 연동 보조) | 모니터링 중 특정 버스 확인 | 무료 |
-| **서울열린데이터광장 지하철 API** | 서울 지하철 실시간 위치·지연 | 모니터링 중 지하철 노선 확인 | 무료 |
-| **기상청 단기예보 API** | 3시간 단위 강수 예보 | WeatherCheckWorker (3시간 주기) | 무료 |
-| **기상청 초단기실황 API** | 현재 강수량(mm) | 모니터링 시작 시, 알람 직전 | 무료 |
+| API | 용도 | 비고 |
+|-----|------|------|
+| **ODsay Lab** | 대중교통 경로 탐색 | 새벽 운행중단 미반영 → 앱에서 필터 |
+| **Seoul Bus API** | 실시간 버스 도착 | arsId 필요 (미구현) |
+| **Seoul Subway API** | 실시간 지하철 도착 | stationName 기반 |
+| **OpenWeatherMap** | 현재 날씨 | 이동시간 배수(travelMultiplier) 적용 |
 
-### 3.2 ODsay API 호출 전략
+### 5.2 ODsay API 호출 전략
 
 ```
-일일 1,000회 한도 관리:
-- 호출 횟수를 DataStore에 날짜별로 기록
-- 950회 도달 시 Tmap 폴백으로 자동 전환
-- 자정에 카운터 리셋
-- 모니터링 주기: 정상 5분 → 이상 감지 시 1분 (호출 절약)
+새벽 운행 중단 필터:
+  - departureMin in 30..329 → 해당 경로 제외
+  - pathType: 1=지하철, 2=버스, 3=버스+지하철
+
+경로 선택:
+  - 항상 도보(Haversine) 포함
+  - 경로 선택 필수 후 저장 가능 (RouteMapScreen)
 ```
 
-### 3.3 기상 보정 로직
+### 5.3 기상 보정 로직
 
 ```kotlin
-// 강수량(mm) → 보정 계수
-fun WeatherCorrection.toMultiplier(userFactor: Float = 1.0f): Float {
-    val base = when {
-        rainfall < 1f  -> 1.00f
-        rainfall < 5f  -> 1.05f
-        rainfall < 10f -> 1.15f
-        else           -> 1.25f
-    }
-    return base * userFactor  // 사용자 설정 계수 반영
-}
-
-// D2D 보정 적용
-correctedD2D = baseDuration * multiplier
+// OpenWeatherMap 현재 날씨 → travelMultiplier 적용
+WeatherApi.getCurrentWeather() → travelMultiplier
+adjustedWakeTime = baseDuration * travelMultiplier
 ```
 
-### 3.4 API 호출 시퀀스 (모니터링 중)
+### 5.4 API 호출 시퀀스 (모니터링 중)
 
 ```
-TrafficMonitorWorker (5분 주기)
+TrafficMonitorWorker
   │
-  ├─[1] ODsay API: 현재 경로 소요시간 재계산
-  │       실패 시 → Tmap API 폴백
-  │       폴백도 실패 → Room 캐시 사용 + "실시간 정보 없음" 표시
+  ├─[1] OdsayApi: 현재 경로 소요시간 재계산 + 새벽 필터
+  │       실패 시 → AppDatabase 캐시 사용
   │
-  ├─[2] 서울 버스 API: 탑승 예정 버스 도착 정보 조회
+  ├─[2] SeoulBusApi: 탑승 예정 버스 도착 정보 (arsId 미구현)
   │
-  ├─[3] 서울 지하철 API: 탑승 예정 노선 지연 여부 조회
+  ├─[3] SeoulSubwayApi: 탑승 예정 노선 지연 여부 (stationName 기반)
   │
-  ├─[4] 기상청 초단기실황 API: 현재 강수량 조회 (3시간 캐시 활용)
+  ├─[4] WeatherApi(OpenWeatherMap): 현재 날씨 조회
   │
-  └─[5] 결과 비교: 이전 D2D vs 새 D2D
-          변경 없음 → 다음 주기 대기
-          변경 있음 → AlarmScheduler 재계산 → 재알림 발송
+  └─[5] AlarmScheduler.schedule(adjustedWakeTime)
+          도착 전이면 → 3분 후 재실행
+          기상시각 경과 시 → 즉시 발화(+3초)
 ```
 
 ---
 
-## 4. WorkManager 백그라운드 작업 설계
+## 6. 경로 미리보기
 
-### 4.1 작업 목록
+- ODsay pathType: 1=지하철, 2=버스, 3=버스+지하철
+- 항상 도보(Haversine) 포함
+- 새벽 운행 중단 필터: departureMin in 30..329 제외
+- 경로 선택 필수 후 저장 가능 (RouteMapScreen에서 선택)
 
-| Worker | 유형 | 주기 | 조건 |
-|--------|------|------|------|
-| `TrafficMonitorWorker` | PeriodicWork | 5분 (이상 감지 시 1분) | 네트워크 연결 필수 |
-| `WeatherCheckWorker` | PeriodicWork | 3시간 | 네트워크 연결 필수 |
-| `AlarmSchedulerWorker` | OneTimeWork | 경로 계산 완료 시 | 없음 |
-| `GeofencingManager` | 시스템 API (별도) | 연속 | 위치 권한 필수 |
+---
 
-### 4.2 TrafficMonitorWorker 설계
+## 7. WorkManager 백그라운드 작업 설계
+
+### 7.1 작업 목록
+
+| Worker | 유형 | 트리거 | 조건 |
+|--------|------|--------|------|
+| `TrafficMonitorWorker` | OneTimeWork (자기 재스케줄) | arrivalTime - monitoringStartMinutes | 네트워크 연결 필수 |
+| `RescheduleAlarmsWorker` | OneTimeWork | 알람 발화 후 / BootReceiver | 없음 |
+
+### 7.2 TrafficMonitorWorker 설계
 
 ```
-시작 조건: 모니터링 시작 시각 도달 (AlarmManager가 WorkManager 체인 시작)
-종료 조건: 도착 목표 시각 + 30분 경과 OR GeofencingManager 도착 감지
+시작 조건: OneTimeWork at (arrivalTime - monitoringStartMinutes)
+종료 조건: 기상시각 경과
 
 작업 흐름:
-  1. DataStore에서 오늘 알람 프로필 로드
-  2. ODsay API 경로 재계산 (캐시 비교)
-  3. 버스/지하철 실시간 정보 조회
-  4. D2D 변화량 > 2분이면 AlarmManager 알람 재스케줄링 + 재알림
-  5. 다음 주기 예약 (정상: 5분, 이상: 1분)
-
-Doze 대응:
-  - setRequiredNetworkType(NetworkType.CONNECTED)
-  - 알람 시각 직전에는 AlarmManager.setExactAndAllowWhileIdle 사용
+  1. AppDatabase에서 AlarmProfile 로드
+  2. OdsayApi 경로 재계산 + 새벽 필터
+  3. SeoulBusApi / SeoulSubwayApi 실시간 정보 조회
+  4. WeatherApi.getCurrentWeather() → travelMultiplier
+  5. AlarmScheduler.schedule(adjustedWakeTime)
+  6. 도착 전이면 → scheduleNextMonitoring(3분 후)
+     기상시각 경과 시 → 즉시 발화(+3초)
 ```
 
-### 4.3 알람 스케줄링 흐름
+### 7.3 RescheduleAlarmsWorker 설계
 
 ```
-AlarmSchedulerWorker
-  │
-  ├─ 목표 도착 시각 - D2D 총 소요시간 - 준비 시간 = 기상 시각
-  │
-  ├─ AlarmManager.setExactAndAllowWhileIdle(기상 시각)
-  │      → BroadcastReceiver: AlarmReceiver
-  │             → AlarmActivity (전체화면) + NotificationCompat
-  │
-  └─ AlarmManager.setExactAndAllowWhileIdle(출발 시각 - 5분)
-         → 출발 준비 알림 NotificationCompat
+투입 시점:
+  - AlarmReceiver 발화 후 (다음 날 재예약)
+  - BootReceiver (재부팅 복구)
+
+작업 흐름:
+  1. AppDatabase에서 활성 AlarmProfile 전체 로드
+  2. CalculateWakeTimeUseCase → 다음 활성요일 탐색
+  3. AlarmScheduler.schedule(wakeTime) 재등록
+  4. TrafficMonitorWorker.scheduleNextMonitoring(profile) 재등록
 ```
 
-### 4.4 Geofencing 설계
+### 7.4 알람 스케줄링 흐름
 
 ```
-목적지 등록 시:
-  GeofencingClient.addGeofences(
-    Geofence(
-      requestId = destinationId,
-      radius = 200f,       // 200m 반경
-      transitionTypes = GEOFENCE_TRANSITION_DWELL,
-      loiteringDelay = 60_000  // 1분 체류 후 감지
-    )
-  )
-
-GeofenceReceiver.onReceive():
-  → DWELL 이벤트 → HistoryRepository.recordArrival(실제 도착 시각)
-  → WorkManager: TrafficMonitorWorker 취소
-  → AlarmManager: 미발생 알람 취소
+CalculateWakeTimeUseCase
+  → 다음 활성요일의 wakeTime 계산
+  → AlarmScheduler.schedule(wakeTime)
+      → AlarmManager.setExactAndAllowWhileIdle
+          → AlarmReceiver → 알림 표시
+          → RescheduleAlarmsWorker 투입
 ```
 
 ---
 
-## 5. 핵심 데이터 모델
+## 8. 핵심 데이터 모델
 
-### AlarmProfile
+### Domain Models
 
 ```kotlin
-// Domain Model
+// AlarmProfile
 data class AlarmProfile(
     val id: Long = 0,
-    val name: String,                     // "출근"
-    val origin: Location,                 // 출발지
-    val destination: Location,            // 목적지
-    val targetArrivalTime: LocalTime,     // 09:00
-    val preparationMinutes: Int = 30,     // 준비 시간
-    val monitoringStartTime: LocalTime,   // 07:00
-    val activeDays: Set<DayOfWeek>,       // 월~금
+    val name: String,
+    val origin: Location,
+    val destination: Location,
+    val targetArrivalTime: LocalTime,
+    val preparationMinutes: Int = 30,
+    val monitoringStartMinutes: Int,      // arrivalTime 기준 N분 전부터 모니터링
+    val activeDays: Set<DayOfWeek>,
     val isEnabled: Boolean = true,
-    val weatherCorrectionFactor: Float = 1.0f  // 사용자 설정 계수
+    val preferredRouteType: RouteType,    // v1→v2 추가
+    val bufferMinutes: Int = 5            // v2→v3 추가
 )
 
-data class Location(
-    val latitude: Double,
-    val longitude: Double,
-    val address: String
-)
-```
-
-### Route
-
-```kotlin
+// Route
 data class Route(
     val id: Long = 0,
     val profileId: Long,
-    val legs: List<RouteLeg>,             // 구간 목록
-    val totalDurationMinutes: Int,        // D2D 총 소요 (보정 전)
-    val correctedDurationMinutes: Int,    // 기상 보정 후
-    val calculatedAt: Instant,
-    val source: RouteSource               // ODSAY / TMAP / CACHE
+    val segments: List<RouteSegment>,
+    val totalDurationMinutes: Int,
+    val source: String                    // "ODSAY" | "CACHE"
 )
 
-data class RouteLeg(
-    val type: LegType,                    // WALK / BUS / SUBWAY
+// RouteSegment
+data class RouteSegment(
+    val type: RouteType,
     val durationMinutes: Int,
     val distanceMeters: Int,
-    val transitInfo: TransitInfo?         // 버스/지하철 정보
+    val transitInfo: TransitInfo?
 )
 
-enum class LegType { WALK, BUS, SUBWAY, TRANSFER_WAIT }
-enum class RouteSource { ODSAY, TMAP, CACHE }
-```
-
-### TransitInfo
-
-```kotlin
-data class TransitInfo(
-    val type: LegType,
-    val lineId: String,                   // 버스 노선 ID / 지하철 노선 코드
-    val lineName: String,                 // "271" / "2호선"
-    val boardingStop: StopInfo,
-    val alightingStop: StopInfo,
-    val realtimeArrivalMinutes: Int?,     // 실시간 도착까지 남은 분 (null = 정보 없음)
-    val isDelayed: Boolean = false,
-    val delayMinutes: Int = 0
-)
-
-data class StopInfo(
-    val id: String,
-    val name: String,
-    val latitude: Double,
-    val longitude: Double
-)
-```
-
-### WeatherInfo
-
-```kotlin
-data class WeatherInfo(
-    val rainfall: Float,                  // 강수량 mm
-    val precipitationProbability: Int,    // 강수 확률 %
-    val forecastTime: Instant,
-    val correctionMultiplier: Float       // 계산된 보정 계수
-)
-```
-
-### AlarmHistory
-
-```kotlin
-data class AlarmHistory(
-    val id: Long = 0,
-    val profileId: Long,
-    val date: LocalDate,
-    val scheduledWakeTime: LocalTime,     // 예정 기상 시각
-    val scheduledDepartureTime: LocalTime,
-    val predictedArrivalTime: LocalTime,
-    val actualArrivalTime: LocalTime?,    // Geofencing 감지값 (null = 미기록)
-    val d2dPredictedMinutes: Int,
-    val d2dActualMinutes: Int?            // 실제 소요 (도착 감지 시 계산)
-)
+enum class RouteType { WALK, BUS, SUBWAY }
 ```
 
 ---
 
-## 6. 보안 설계 결정
+## 9. DB 마이그레이션
 
-### 6.1 API 키 관리
+| 버전 | 변경 내용 |
+|------|----------|
+| v1 | 초기 스키마 (AlarmProfile 기본 필드) |
+| v2 | `preferredRouteType` 컬럼 추가 |
+| v3 | `bufferMinutes` 컬럼 추가 (default 5) |
+
+```kotlin
+// Room DB 버전
+@Database(entities = [...], version = 3)
+abstract class AppDatabase : RoomDatabase()
+
+// Migration 1→2
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE alarm_profile ADD COLUMN preferredRouteType TEXT NOT NULL DEFAULT 'BUS'")
+    }
+}
+
+// Migration 2→3
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE alarm_profile ADD COLUMN bufferMinutes INTEGER NOT NULL DEFAULT 5")
+    }
+}
+```
+
+---
+
+## 10. 보안 설계 결정
+
+### 10.1 API 키 관리
 
 ```
 저장 위치: local.properties (git 제외) → BuildConfig 필드로 주입
@@ -380,65 +378,68 @@ data class AlarmHistory(
 배포 시:  R8 전체 난독화 활성화 (minifyEnabled = true)
 ```
 
-### 6.2 위치 정보 보호
+### 10.2 위치 정보 보호
 
 ```
-저장:  Room DB + SQLCipher 암호화 (또는 EncryptedSharedPreferences)
+저장:  Room DB + SQLCipher 암호화
 전송:  API 호출 시 좌표 쌍만 전송 (출발지 lat/lon, 목적지 lat/lon)
-보관:  AlarmHistory 내 위치는 정류장 ID(비개인정보)로 대체 저장
 삭제:  30일 경과 데이터 자동 삭제 스케줄러
 ```
 
-### 6.3 컴포넌트 보안
+### 10.3 컴포넌트 보안
 
 ```xml
 <!-- AndroidManifest.xml -->
 <receiver android:name=".AlarmReceiver"
-          android:exported="false" />  <!-- 외부 앱 호출 차단 -->
+          android:exported="false" />
 
-<service android:name=".GeofenceService"
-         android:exported="false" />
+<receiver android:name=".BootReceiver"
+          android:exported="true">
+    <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+    </intent-filter>
+</receiver>
 
 <!-- 권한 최소화 -->
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 <!-- FCM 관련 권한 없음 (로컬 알림만) -->
 ```
 
 ---
 
-## 7. 모듈 구조 (패키지)
+## 11. 모듈 구조 (패키지)
 
 ```
 com.example.smartalarm/
 ├── presentation/
-│   ├── onboarding/        # OnboardingFragment + ViewModel
-│   ├── home/              # HomeScreen (다음 알람 요약)
-│   ├── route/             # RouteScreen (경로 상세)
-│   ├── settings/          # SettingsScreen (프로필 편집, 우천 계수)
-│   └── alarm/             # AlarmActivity (전체화면 알람)
+│   ├── home/              # HomeScreen, HomeViewModel
+│   ├── alarmedit/         # AlarmEditScreen, AlarmEditViewModel
+│   └── routemap/          # RouteMapScreen
 ├── domain/
-│   ├── model/             # AlarmProfile, Route, TransitInfo, WeatherInfo, AlarmHistory
+│   ├── model/             # AlarmProfile, Route, RouteType, RouteSegment
 │   ├── repository/        # Repository 인터페이스
-│   └── usecase/           # CalculateRouteUseCase 등
+│   └── usecase/           # CalculateWakeTimeUseCase, GetOptimalRouteUseCase
 ├── data/
 │   ├── remote/
-│   │   ├── odsay/         # OdsayApiService + DTO + Mapper
-│   │   ├── tmap/          # TmapApiService + DTO + Mapper
-│   │   ├── seoulbus/      # SeoulBusApiService + DTO + Mapper
-│   │   ├── subway/        # SubwayApiService + DTO + Mapper
-│   │   └── weather/       # WeatherApiService + DTO + Mapper
+│   │   ├── odsay/         # OdsayApi + DTO + Mapper
+│   │   ├── seoulbus/      # SeoulBusApi + DTO + Mapper
+│   │   ├── seoulsubway/   # SeoulSubwayApi + DTO + Mapper
+│   │   └── weather/       # WeatherApi (OpenWeatherMap) + DTO + Mapper
 │   ├── local/
-│   │   ├── db/            # AppDatabase, Dao 인터페이스들
-│   │   └── datastore/     # SettingsDataStore
-│   ├── repository/        # Repository 구현체
-│   └── background/
-│       ├── worker/        # TrafficMonitorWorker, WeatherCheckWorker, AlarmSchedulerWorker
-│       └── geofence/      # GeofencingManager, GeofenceReceiver
+│   │   └── db/            # AppDatabase, Dao, Migration
+│   └── repository/        # RouteRepositoryImpl, AlarmRepositoryImpl
+├── alarm/
+│   ├── AlarmScheduler.kt
+│   ├── AlarmReceiver.kt
+│   └── BootReceiver.kt
+├── worker/
+│   ├── TrafficMonitorWorker.kt
+│   └── RescheduleAlarmsWorker.kt
 └── di/                    # Hilt Module
 ```
 
 ---
 
-*다음 단계: test-engineer 투입 → TDD 기반 UseCase 단위 테스트 작성 후 implementation 시작*
+*최종 수정: 2026-03-16 — Room v3, OpenWeatherMap, 알람 생명주기 플로우, DB 마이그레이션 이력 반영*
