@@ -96,7 +96,6 @@
     <button class="mode-btn" data-mode="track">Tracking</button>
   </div>
   <div class="spacer"></div>
-  <label class="setting" id="stayWrap" style="display:none"><input type="checkbox" id="stayChk" checked> 제자리(이동 없음)</label>
   <div class="setting">크기 <input type="range" id="sizeRange" min="16" max="70" value="44"></div>
   <div class="setting">속도 <input type="range" id="speedRange" min="1" max="10" value="5"></div>
   <div class="setting">시간
@@ -126,7 +125,7 @@
   <div id="overlay" class="veil">
     <h2 id="ovTitle">Sol Aim Trainer</h2>
     <p id="ovText">
-      <b>Reaction</b> — 무작위 타이밍에 뜨는 타겟을 인지하자마자 클릭. <b>인지→클릭 시간(ms)</b>만 측정. 목표 300ms.<br>
+      <b>Reaction</b> — 화면 <b>무작위 위치·타이밍</b>에 뜨는 타겟을 인지하자마자 빠르게 이동+클릭. <b>인지→클릭 시간(ms)</b> 측정. 목표 300ms.<br>
       <b>Gridshot</b> — 동시에 뜨는 여러 타겟을 빠르게 클릭.<br>
       <b>Flick</b> — 한 번에 하나, 조준+클릭 처리율.<br>
       <b>Tracking</b> — 움직이는 타겟 위에 커서 유지.<br><br>
@@ -207,10 +206,8 @@
   }
   function makeReactTarget(now) {
     const r = cfg.size;
-    let x, y;
-    if (el('stayChk').checked) { x = W/2; y = H/2; }      // 제자리: 이동 제거 → 순수 반응
-    else { x = rand(r, W-r); y = rand(r, H-r); }          // 무작위: 인지+조준
-    return { x, y, r, vx:0, vy:0, born: now };
+    // 무작위 위치 출현 → 인지 + 마우스 이동 + 클릭 전체 시간 측정
+    return { x: rand(r, W-r), y: rand(r, H-r), r, vx:0, vy:0, born: now };
   }
   function scheduleReact(now) { state.phase = 'wait'; state.targets = []; state.showAt = now + rand(700, 2600); }
 
@@ -269,7 +266,7 @@
     fetch('/log', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(rec) }).catch(()=>{});
 
     ui.ovTitle.textContent = '결과';
-    ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${cfg.duration}s · 크기 ${cfg.size}${mode==='react'?(el('stayChk').checked?' · 제자리':' · 무작위 위치'):' · 속도 '+cfg.speed}`;
+    ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${cfg.duration}s · 크기 ${cfg.size}${mode==='react'?' · 무작위 위치':' · 속도 '+cfg.speed}`;
     let rows = '';
     const add = (l,v) => rows += `<div class="rl">${l}</div><div class="rv">${v}</div>`;
 
@@ -490,10 +487,10 @@
           <canvas class="spark" id="sparkRt"></canvas>
         </div>
         <table class="hist">
-          <thead><tr><th>날짜</th><th>위치</th><th>평균 ms</th><th>최저 ms</th><th>300↓</th><th>성급</th></tr></thead>
+          <thead><tr><th>날짜</th><th>크기</th><th>평균 ms</th><th>최저 ms</th><th>300↓</th><th>성급</th></tr></thead>
           <tbody>
             ${recs.slice().reverse().slice(0,12).map(r=>`
-              <tr><td>${fmtDate(r.t)}</td><td>${r.size>=44?'—':''}${'중앙/무작위'}</td>
+              <tr><td>${fmtDate(r.t)}</td><td>${r.size}</td>
               <td>${r.rt||'—'}</td><td>${r.bestRt||'—'}</td>
               <td>${r.hits?Math.round((r.under300||0)/r.hits*100)+'%':'—'}</td><td>${r.fakes||0}</td></tr>`).join('')}
           </tbody>
@@ -543,7 +540,6 @@
     [...el('modes').querySelectorAll('.mode-btn')].forEach(b=>b.classList.remove('active'));
     btn.classList.add('active'); mode = btn.dataset.mode; running = false;
     analysis.classList.add('hidden');
-    el('stayWrap').style.display = (mode==='react') ? 'flex' : 'none';
     ui.ovTitle.textContent = modeName(mode); ui.ovResult.innerHTML='';
     el('startBtn').textContent = '시작 (클릭)';
     overlay.classList.remove('hidden');
