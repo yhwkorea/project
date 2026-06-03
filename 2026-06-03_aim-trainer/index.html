@@ -84,6 +84,10 @@
   .empty { color:var(--muted); padding:30px; font-size:14px; }
   .row-actions { display:flex; gap:8px; margin-top:14px; }
   .danger { border-color:#5a2222 !important; color:#f0a;}
+  .coach { margin-top:14px; padding:12px 16px; background:#1c2333; border:1px solid #2d4a6b; border-radius:8px; text-align:left; max-width:480px; }
+  .coach-h { font-size:13px; color:var(--accent); font-weight:700; margin-bottom:8px; }
+  .coach-tip { font-size:13px; line-height:1.55; margin:6px 0; color:var(--text); }
+  .coach-tip b { color:#f0c674; }
 </style>
 </head>
 <body>
@@ -426,7 +430,16 @@
         add(`이전 평균(${prior.length}판)`, `<span class="${cls}">${dPct>=0?'▲':'▼'} ${Math.abs(dPct).toFixed(1)}%</span>`);
       } else { add('기록', '첫 판 저장됨'); }
     }
-    ui.ovResult.innerHTML = `<div class="result-grid">${rows}</div>`;
+    const cTips = coachFeedback({
+      mode, acc, overRate,
+      ballisticPct: Math.round(tavg('ballisticPct')), corrMs: Math.round(tavg('corrMs')),
+      eff: tavg('eff'), cleanPct: state.hits ? Math.round((state.clean||0)/state.hits*100) : 100,
+      rt, under300: state.under300, total: state.hits, miss: state.miss, hasTraj: tr.length > 0,
+    });
+    const coachHtml = cTips.length
+      ? `<div class="coach"><div class="coach-h">💡 다음에 이걸 고쳐봐</div>${cTips.map(([h,b])=>`<div class="coach-tip"><b>${h}</b> — ${b}</div>`).join('')}</div>`
+      : '';
+    ui.ovResult.innerHTML = `<div class="result-grid">${rows}</div>${coachHtml}`;
     el('startBtn').textContent = '다시 시작';
     overlay.classList.remove('hidden');
   }
@@ -631,6 +644,22 @@
     if (bpct >= 88) return ['팔 던지기 정확 ✓', 'delta-up'];
     if (bpct >= 70) return ['팔 덜 던짐→손목 의존', 'delta-down'];
     return ['팔 거의 안 씀→질질', 'delta-down'];
+  }
+  // 판 결과 → 가장 임팩트 큰 약점 1~2개 + 구체적 처방
+  function coachFeedback(m) {
+    const tips = [];
+    if (m.hasTraj) {
+      if (m.overRate >= 35) tips.push(['🛑 오버슈팅을 줄여라', `타겟을 지나치는 비율이 ${m.overRate}%. 확 던지기를 살짝 약하게 하고 끝에서 한 번에 멈추는 연습(stop-and-confirm). 지나쳤다 되돌아오는 시간이 가장 큰 손해야.`]);
+      if (m.ballisticPct && m.ballisticPct < 78) tips.push(['💪 팔을 더 과감하게', `첫 던지기가 타겟의 ${m.ballisticPct}%까지만 가서 나머지를 손목으로 수습 중이야. 한 번에 타겟까지 팔로 쭉 던져 — 손목 보정을 줄이는 게 핵심.`]);
+      else if (m.ballisticPct > 112) tips.push(['🎯 거리감 줄이기', `던지기가 타겟을 ${m.ballisticPct-100}% 지나쳐. 목표보다 살짝 덜 던지는 느낌으로 거리감을 잡아봐.`]);
+      if (m.corrMs >= 220) tips.push(['✂️ 끝마무리가 길다', `보정에 ${m.corrMs}ms를 쓰고 있어. 첫 던지기만 정확해지면 이 시간이 통째로 사라져서 이동이 확 빨라진다.`]);
+      if (m.eff && m.eff < 0.8) tips.push(['📏 직선으로 가라', `경로 효율 ${Math.round(m.eff*100)}%. 마우스가 빙 돌아가고 있어 — 타겟까지 최단 직선으로.`]);
+    }
+    if (m.mode === 'precision' && m.cleanPct < 70) tips.unshift(['🐢 더 천천히', `클린율 ${m.cleanPct}%. 속도를 더 버려도 돼 — 한 발씩 완벽하게 멈춰서 클릭하는 게 이 모드의 전부야.`]);
+    if (m.mode !== 'react' && m.acc < 55) tips.unshift(['🎯 정확도부터', `정확도 ${Math.round(m.acc)}%로 너무 낮아. 속도를 버리고 일단 맞추는 데 집중 — 빗맞힘 1번이 점수와 시간을 둘 다 깎아.`]);
+    if (m.mode === 'react' && m.total && m.under300 === 0 && m.rt) tips.push(['⚡ 300ms 도전', `아직 300ms 이하가 없어. 가까이 뜬 타겟에서만이라도 한 번 터뜨려서 best 기록부터 깨봐.`]);
+    if (!tips.length) tips.push(['✅ 폼이 좋다', '큰 약점이 안 보여. 타겟 크기를 줄이거나 페이스를 올려서 난이도를 높일 때야.']);
+    return tips.slice(0, 2);
   }
 
   // ---------- analysis ----------
