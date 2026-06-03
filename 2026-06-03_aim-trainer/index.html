@@ -96,7 +96,7 @@
   <div class="modes" id="modes">
     <button class="mode-btn" data-mode="react">Reaction</button>
     <button class="mode-btn" data-mode="precision">Precision</button>
-    <button class="mode-btn active" data-mode="grid">Gridshot</button>
+    <button class="mode-btn active" data-mode="kite">Kite</button>
     <button class="mode-btn" data-mode="flick">Flick</button>
     <button class="mode-btn" data-mode="track">Tracking</button>
   </div>
@@ -147,7 +147,6 @@
         <div class="an-tabs" id="anTabs">
           <button class="mode-btn" data-f="react">Reaction</button>
           <button class="mode-btn active" data-f="all">전체</button>
-          <button class="mode-btn" data-f="grid">Gridshot</button>
           <button class="mode-btn" data-f="flick">Flick</button>
           <button class="mode-btn" data-f="track">Tracking</button>
         </div>
@@ -177,7 +176,7 @@
   };
 
   const STORE_KEY = 'solAimStats.v1';
-  let mode = 'grid', running = false;
+  let mode = 'kite', running = false;
   let W = 0, H = 0, DPR = 1;
   const cfg = { size: 44, speed: 5, duration: 60 };
   const state = {
@@ -191,6 +190,8 @@
     targetGoal: 25, clean: 0, lastClean: 0,
     // ballistic/corrective 시각화 (직전 궤적의 전환점 인덱스)
     lastTransIdx: -1,
+    // kite(롤 카이팅) 모드: 플레이어/적 상태
+    kite: null,
   };
   const mouse = { x: 0, y: 0, inside: false };
 
@@ -221,6 +222,15 @@
     return { x: rand(r, W-r), y: rand(r, H-r), r, vx:0, vy:0, born: now };
   }
   function scheduleReact(now) { state.phase = 'wait'; state.targets = []; state.showAt = now + rand(700, 2600); }
+
+  // kite: 적을 화면 가장자리 무작위 위치에 재생성
+  function respawnEnemy(k) {
+    const e = Math.floor(rand(0,4)); k.ehp = 100;
+    if (e===0){ k.ex=rand(40,W-40); k.ey=40; }
+    else if (e===1){ k.ex=rand(40,W-40); k.ey=H-40; }
+    else if (e===2){ k.ex=40; k.ey=rand(40,H-40); }
+    else { k.ex=W-40; k.ey=rand(40,H-40); }
+  }
 
   // 한 번의 명중에 대한 커서 궤적 메트릭: 인지 지연 / 이동 시간 / 경로 효율 / 오버슈팅
   function trialMetrics(t, now) {
@@ -287,6 +297,8 @@
       state.targets.push(makeTarget());
       state.showMouse = { x: mouse.x, y: mouse.y };
       state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: now }] : [];
+    } else if (mode === 'kite') {
+      state.targets = [];   // 자체 enemy 사용
     } else {
       state.targets.push(makeTarget());
       if (mode === 'flick') { state.showMouse = { x: mouse.x, y: mouse.y }; state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: now }] : []; }
@@ -307,6 +319,7 @@
       clean:0, lastClean:0,
     });
     state.targetGoal = 25;
+    if (mode === 'kite') state.kite = {px:W/2, py:H*0.72, tx:W/2, ty:H*0.72, ex:W/2, ey:H*0.18, ehp:100, lastAtk:0, kills:0, taken:0, atk:0, invuln:0};
     state.endAt = now + cfg.duration*1000;
     state.lastTs = now;
     spawnInitial(now);
@@ -347,11 +360,19 @@
     fetch('/log', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(rec) }).catch(()=>{});
 
     ui.ovTitle.textContent = '결과';
-    ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${mode==='precision'?state.targetGoal+'타겟':cfg.duration+'s'} · 크기 ${cfg.size}${mode==='react'?' · 무작위 위치':(mode==='precision'?' · 정밀(느린 학습)':' · 속도 '+cfg.speed)}`;
+    ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${mode==='precision'?state.targetGoal+'타겟':cfg.duration+'s'}${mode==='kite'?' · 롤 카이팅 연습':' · 크기 '+cfg.size+(mode==='react'?' · 무작위 위치':(mode==='precision'?' · 정밀(느린 학습)':' · 속도 '+cfg.speed))}`;
     let rows = '';
     const add = (l,v) => rows += `<div class="rl">${l}</div><div class="rv">${v}</div>`;
 
-    if (mode === 'precision') {
+    if (mode === 'kite') {
+      const k = state.kite;
+      const possible = Math.floor(cfg.duration*1000/600);
+      const eff = possible ? Math.round(k.atk/possible*100) : 0;
+      add('처치', k.kills);
+      add('공격 횟수', k.atk);
+      add('피격', k.taken);
+      add('공격 효율(쿨다운 활용)', `${eff}%`);
+    } else if (mode === 'precision') {
       const clean = state.clean||0, total = state.hits;
       const cleanPct = total ? Math.round(clean/total*100) : 0;
       add('완료 타겟', total);
@@ -430,11 +451,13 @@
         add(`이전 평균(${prior.length}판)`, `<span class="${cls}">${dPct>=0?'▲':'▼'} ${Math.abs(dPct).toFixed(1)}%</span>`);
       } else { add('기록', '첫 판 저장됨'); }
     }
+    const kEff = (mode==='kite' && state.kite) ? Math.round(state.kite.atk/Math.max(1,Math.floor(cfg.duration*1000/600))*100) : 0;
     const cTips = coachFeedback({
       mode, acc, overRate,
       ballisticPct: Math.round(tavg('ballisticPct')), corrMs: Math.round(tavg('corrMs')),
       eff: tavg('eff'), cleanPct: state.hits ? Math.round((state.clean||0)/state.hits*100) : 100,
       rt, under300: state.under300, total: state.hits, miss: state.miss, hasTraj: tr.length > 0,
+      kills: state.kite?state.kite.kills:0, taken: state.kite?state.kite.taken:0, kiteEff: kEff,
     });
     const coachHtml = cTips.length
       ? `<div class="coach"><div class="coach-h">💡 다음에 이걸 고쳐봐</div>${cTips.map(([h,b])=>`<div class="coach-tip"><b>${h}</b> — ${b}</div>`).join('')}</div>`
@@ -472,6 +495,15 @@
         const d = Math.hypot(mouse.x-t.x, mouse.y-t.y);
         if (mouse.inside && d <= t.r) { state.trackTime += dt; state.score += Math.round(dt*100); }
       }
+    } else if (mode === 'kite') {
+      const k = state.kite;
+      const pdx=k.tx-k.px, pdy=k.ty-k.py, pd=Math.hypot(pdx,pdy);
+      if (pd>1){ const s=Math.min(340*dt,pd); k.px+=pdx/pd*s; k.py+=pdy/pd*s; }   // 플레이어 이동
+      const edx=k.px-k.ex, edy=k.py-k.ey, ed=Math.hypot(edx,edy);
+      if (ed>1){ const s=Math.min(175*dt,ed); k.ex+=edx/ed*s; k.ey+=edy/ed*s; }   // 적 추격
+      if (k.invuln>0) k.invuln-=dt*1000;
+      if (ed<40 && k.invuln<=0){ k.taken++; k.invuln=900; }                       // 피격
+      if (k.ehp<=0){ k.kills++; respawnEnemy(k); }                                // 처치
     }
     draw(); updateStats();
     requestAnimationFrame(loop);
@@ -534,6 +566,21 @@
       ctx.textAlign = 'start';
     }
     if (mode === 'flick' && running) drawTrail();
+    if (mode === 'kite' && running && state.kite) {
+      const k = state.kite;
+      ctx.strokeStyle='rgba(88,166,255,.22)'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(k.px,k.py,200,0,Math.PI*2); ctx.stroke();   // 사거리
+      const inR = Math.hypot(k.px-k.ex,k.py-k.ey)<=200, ready = performance.now()-k.lastAtk>=600;
+      ctx.fillStyle=(inR&&ready)?'#f0c674':'#f85149';                       // 공격 가능하면 노랑
+      ctx.beginPath(); ctx.arc(k.ex,k.ey,22,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#30363d'; ctx.fillRect(k.ex-26,k.ey-36,52,5);
+      ctx.fillStyle='#3fb950'; ctx.fillRect(k.ex-26,k.ey-36,52*Math.max(0,k.ehp)/100,5);
+      ctx.fillStyle = k.invuln>0?'#8b949e':'#58a6ff';                       // 플레이어
+      ctx.beginPath(); ctx.arc(k.px,k.py,16,0,Math.PI*2); ctx.fill();
+      ctx.textAlign='center'; ctx.fillStyle='#8b949e'; ctx.font='600 14px sans-serif';
+      ctx.fillText('노란 적=공격 가능 (클릭) · 빈 곳 클릭=이동 · 쿨다운 중엔 도망쳐!', W/2, H-22);
+      ctx.textAlign='start';
+    }
   }
 
   function localPos(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX-r.left, y: e.clientY-r.top }; }
@@ -592,6 +639,16 @@
       return;
     }
 
+    if (mode === 'kite') {
+      const k = state.kite; const now2 = performance.now();
+      const dToE = Math.hypot(p.x-k.ex, p.y-k.ey), pToE = Math.hypot(k.px-k.ex, k.py-k.ey);
+      if (dToE <= 34) {                                        // 적 클릭
+        if (pToE <= 200 && now2-k.lastAtk >= 600) { k.ehp-=34; k.lastAtk=now2; k.atk++; k.tx=k.px; k.ty=k.py; } // 사거리+쿨다운 OK → 공격
+        else { k.tx=k.ex; k.ty=k.ey; }                        // 사거리 밖/쿨다운 → 적에게 접근
+      } else { k.tx=p.x; k.ty=p.y; }                          // 빈 곳 → 이동
+      return;
+    }
+
     // grid / flick
     let hit = -1;
     for (let i=state.targets.length-1;i>=0;i--) {
@@ -621,6 +678,12 @@
 
   function updateStats() {
     ui.time.textContent = mode==='precision' ? String(Math.max(0, state.targetGoal - state.hits)) : state.timeLeft.toFixed(1);
+    if (mode === 'kite') {
+      const k = state.kite || {};
+      ui.score.textContent = k.kills||0; ui.hits.textContent = k.kills||0;
+      ui.miss.textContent = k.taken||0; ui.acc.textContent='—'; ui.rt.textContent='—'; ui.u3.textContent='—';
+      return;
+    }
     ui.score.textContent = state.score;
     ui.hits.textContent = state.hits;
     ui.miss.textContent = state.miss;
@@ -629,7 +692,7 @@
     ui.rt.textContent = state.rtCount ? Math.round(state.rtSum/state.rtCount) : '—';
     ui.u3.textContent = state.under300;
   }
-  const modeName = m => ({react:'Reaction', precision:'Precision', grid:'Gridshot', flick:'Flick', track:'Tracking'}[m]);
+  const modeName = m => ({react:'Reaction', precision:'Precision', kite:'Kite', grid:'Gridshot', flick:'Flick', track:'Tracking'}[m]);
   // reach 비율 → 감도 진단 [문구, css클래스]
   function sensDiag(reach) {
     if (!reach) return ['—', ''];
@@ -648,6 +711,11 @@
   // 판 결과 → 가장 임팩트 큰 약점 1~2개 + 구체적 처방
   function coachFeedback(m) {
     const tips = [];
+    if (m.mode === 'kite') {
+      if (m.taken > m.kills + 2) return [['🩸 너무 많이 맞는다', '공격(0.6초 쿨다운) 직후 적에서 멀어지게 이동해. 공격하자마자 도망 → 쿨 끝나면 멈춰서 한 대 → 다시 도망. 이게 스터터 스텝이야.']];
+      if (m.kiteEff < 50) return [['⏱️ 공격을 더 자주', '쿨다운이 끝났는데 안 때리고 도망만 치고 있어. 쿨 끝나면 바로 한 대 박고 다시 빠져 — 도망과 공격을 번갈아.']];
+      return [['✅ 카이팅 좋음', '거리 유지하며 잘 패고 있어. 더 오래 버티거나 처치 수를 늘려봐.']];
+    }
     if (m.hasTraj) {
       if (m.overRate >= 35) tips.push(['🛑 오버슈팅을 줄여라', `타겟을 지나치는 비율이 ${m.overRate}%. 확 던지기를 살짝 약하게 하고 끝에서 한 번에 멈추는 연습(stop-and-confirm). 지나쳤다 되돌아오는 시간이 가장 큰 손해야.`]);
       if (m.ballisticPct && m.ballisticPct < 78) tips.push(['💪 팔을 더 과감하게', `첫 던지기가 타겟의 ${m.ballisticPct}%까지만 가서 나머지를 손목으로 수습 중이야. 한 번에 타겟까지 팔로 쭉 던져 — 손목 보정을 줄이는 게 핵심.`]);
