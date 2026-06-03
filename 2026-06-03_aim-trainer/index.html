@@ -155,6 +155,8 @@
       </div>
       <div id="anBody"></div>
       <div class="row-actions">
+        <button class="ctrl-btn" id="anExport">📋 내보내기</button>
+        <button class="ctrl-btn" id="anImport">📥 가져오기</button>
         <button class="ctrl-btn danger" id="anClear">기록 전체 삭제</button>
       </div>
     </div>
@@ -358,7 +360,8 @@
     const priorRt = prior.filter(r=>r.rt>0);
     const priorRtAvg = priorRt.length ? priorRt.reduce((s,r)=>s+r.rt,0)/priorRt.length : null;
     saveRecord(rec);
-    fetch('/log', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(rec) }).catch(()=>{});
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1')   // 로컬 서버일 때만 수집
+      fetch('/log', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(rec) }).catch(()=>{});
 
     ui.ovTitle.textContent = '결과';
     ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${mode==='precision'?state.targetGoal+'타겟':cfg.duration+'s'}${mode==='kite'?' · 롤 카이팅 연습':' · 크기 '+cfg.size+(mode==='react'?' · 무작위 위치':(mode==='precision'?' · 정밀(느린 학습)':' · 속도 '+cfg.speed))}`;
@@ -878,6 +881,26 @@
   el('anClose').addEventListener('click', closeAnalysis);
   el('anClear').addEventListener('click', () => {
     if (confirm('저장된 기록을 모두 삭제할까요? 되돌릴 수 없습니다.')) { localStorage.removeItem(STORE_KEY); renderAnalysis(); }
+  });
+  el('anExport').addEventListener('click', () => {
+    const data = localStorage.getItem(STORE_KEY) || '[]';
+    if (navigator.clipboard) navigator.clipboard.writeText(data)
+      .then(()=>alert('기록을 클립보드에 복사했어요. Sol에게 붙여넣으면 분석해줘요.'))
+      .catch(()=>prompt('아래를 복사하세요:', data));
+    else prompt('아래를 복사하세요:', data);
+  });
+  el('anImport').addEventListener('click', () => {
+    const t = prompt('내보낸 기록 JSON을 붙여넣으세요 (기존 기록에 합쳐집니다):');
+    if (!t) return;
+    try {
+      const incoming = JSON.parse(t);
+      if (!Array.isArray(incoming)) throw 0;
+      const cur = loadRecords(), seen = new Set(cur.map(r=>r.t));
+      const merged = cur.concat(incoming.filter(r=>r&&r.t&&!seen.has(r.t))).sort((a,b)=>a.t-b.t);
+      localStorage.setItem(STORE_KEY, JSON.stringify(merged));
+      renderAnalysis();
+      alert(`가져오기 완료: ${merged.length - cur.length}판 추가됨.`);
+    } catch { alert('형식이 올바르지 않아요.'); }
   });
   el('sizeRange').addEventListener('input', e => cfg.size = +e.target.value);
   el('speedRange').addEventListener('input', e => cfg.speed = +e.target.value);
