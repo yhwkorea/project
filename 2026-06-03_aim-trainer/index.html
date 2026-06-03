@@ -256,6 +256,8 @@
     const prior = loadRecords().filter(r => r.mode === mode);
     const priorAvg = prior.length ? prior.reduce((s,r)=>s+r.score,0)/prior.length : null;
     saveRecord(rec);
+    // 로컬 수집 서버(localhost)에서 열린 경우 stats.json 에도 기록 → Sol이 직접 읽어 분석
+    fetch('/log', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(rec) }).catch(()=>{});
 
     ui.ovTitle.textContent = '결과';
     ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${cfg.duration}s · 크기 ${cfg.size} · 속도 ${cfg.speed}`;
