@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sol Aim Trainer</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --accent: #58a6ff; --good: #3fb950; --bad: #f85149;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex; flex-direction: column;
+    overflow: hidden; user-select: none;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; color: var(--accent); letter-spacing: .5px; }
+  .modes { display: flex; gap: 6px; }
+  .mode-btn, .ctrl-btn {
+    background: #21262d; color: var(--text);
+    border: 1px solid var(--border); padding: 6px 12px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; transition: .15s;
+  }
+  .mode-btn:hover, .ctrl-btn:hover { border-color: var(--accent); }
+  .mode-btn.active { background: var(--accent); color: #0d1117; font-weight: 600; border-color: var(--accent); }
+  .spacer { flex: 1; }
+  .setting { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .setting input[type=range] { width: 90px; accent-color: var(--accent); }
+  select { background:#21262d; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px; }
+  .stats {
+    display: flex; gap: 22px; padding: 8px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat { text-align: center; }
+  .stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .stat .value { font-size: 20px; font-weight: 700; }
+  #arena { position: relative; flex: 1; overflow: hidden; cursor: crosshair; }
+  canvas#cv { display: block; width: 100%; height: 100%; }
+  .veil {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(13,17,23,.86); backdrop-filter: blur(2px);
+    text-align: center; padding: 20px; overflow:auto;
+  }
+  .veil.hidden { display: none; }
+  .veil h2 { font-size: 26px; }
+  .veil p { color: var(--muted); max-width: 460px; line-height: 1.5; font-size: 14px; }
+  .big {
+    font-size: 18px; padding: 12px 30px; background: var(--good);
+    color: #0d1117; border: none; border-radius: 8px; cursor: pointer; font-weight: 700;
+  }
+  .big:hover { filter: brightness(1.1); }
+  .result-grid { display: grid; grid-template-columns: repeat(2, auto); gap: 8px 36px; margin: 6px 0; font-variant-numeric: tabular-nums; }
+  .result-grid .rl { color: var(--muted); text-align: right; font-size: 14px; }
+  .result-grid .rv { font-weight: 700; text-align: left; font-size: 16px; }
+  .delta-up { color: var(--good); } .delta-down { color: var(--bad); }
+  kbd { background:#21262d; border:1px solid var(--border); border-radius:4px; padding:1px 6px; font-size:12px; }
+
+  /* analysis */
+  #analysis { z-index: 5; }
+  .panel-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 22px; max-width: 760px; width: 100%;
+  }
+  .an-head { display:flex; align-items:center; gap:12px; margin-bottom:14px; flex-wrap:wrap; }
+  .an-head h2 { font-size: 22px; }
+  .an-tabs { display:flex; gap:6px; }
+  .sumrow { display:flex; gap:26px; flex-wrap:wrap; margin:10px 0 16px; font-variant-numeric: tabular-nums; }
+  .sumrow .s .l { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .sumrow .s .v { font-size:22px; font-weight:700; }
+  .chartwrap { background:#0d1117; border:1px solid var(--border); border-radius:8px; padding:10px; }
+  .chart-cap { font-size:11px; color:var(--muted); margin-bottom:4px; }
+  canvas.spark { width:100%; height:140px; display:block; }
+  table.hist { width:100%; border-collapse:collapse; margin-top:14px; font-size:12px; font-variant-numeric:tabular-nums; }
+  table.hist th, table.hist td { text-align:right; padding:5px 8px; border-bottom:1px solid var(--border); }
+  table.hist th { color:var(--muted); font-weight:600; text-transform:uppercase; font-size:10px; letter-spacing:.5px; }
+  table.hist td:first-child, table.hist th:first-child { text-align:left; }
+  .empty { color:var(--muted); padding:30px; font-size:14px; }
+  .row-actions { display:flex; gap:8px; margin-top:14px; }
+  .danger { border-color:#5a2222 !important; color:#f0a;}
+</style>
+</head>
+<body>
+<header>
+  <h1>SOL · AIM</h1>
+  <div class="modes" id="modes">
+    <button class="mode-btn active" data-mode="grid">Gridshot</button>
+    <button class="mode-btn" data-mode="flick">Flick</button>
+    <button class="mode-btn" data-mode="track">Tracking</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="setting">크기 <input type="range" id="sizeRange" min="16" max="70" value="38"></div>
+  <div class="setting">속도 <input type="range" id="speedRange" min="1" max="10" value="5"></div>
+  <div class="setting">시간
+    <select id="durSelect">
+      <option value="30">30s</option>
+      <option value="60" selected>60s</option>
+      <option value="120">120s</option>
+    </select>
+  </div>
+  <button class="ctrl-btn" id="statsBtn">📊 기록</button>
+  <button class="ctrl-btn" id="restartBtn">재시작</button>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="label">남은 시간</div><div class="value" id="sTime">60.0</div></div>
+  <div class="stat"><div class="label">점수</div><div class="value" id="sScore" style="color:var(--accent)">0</div></div>
+  <div class="stat"><div class="label">명중</div><div class="value" id="sHits">0</div></div>
+  <div class="stat"><div class="label">놓침</div><div class="value" id="sMiss" style="color:var(--bad)">0</div></div>
+  <div class="stat"><div class="label">정확도</div><div class="value" id="sAcc">100%</div></div>
+  <div class="stat"><div class="label">반응(ms)</div><div class="value" id="sRt">—</div></div>
+</div>
+
+<div id="arena">
+  <canvas id="cv"></canvas>
+
+  <!-- start / result veil -->
+  <div id="overlay" class="veil">
+    <h2 id="ovTitle">Sol Aim Trainer</h2>
+    <p id="ovText">
+      <b>Gridshot</b> — 동시에 뜨는 여러 타겟을 빠르게 클릭(타겟 전환 훈련).<br>
+      <b>Flick</b> — 한 번에 하나, 순간 반응속도 측정.<br>
+      <b>Tracking</b> — 움직이는 타겟 위에 커서를 올려두면 점수 누적.<br><br>
+      매 판은 자동 저장되고, 상단 <b>📊 기록</b>에서 추세를 분석할 수 있어요.
+    </p>
+    <div id="ovResult"></div>
+    <button class="big" id="startBtn">시작 (클릭)</button>
+  </div>
+
+  <!-- analysis veil -->
+  <div id="analysis" class="veil hidden">
+    <div class="panel-card">
+      <div class="an-head">
+        <h2>기록 · 분석</h2>
+        <div class="an-tabs" id="anTabs">
+          <button class="mode-btn active" data-f="all">전체</button>
+          <button class="mode-btn" data-f="grid">Gridshot</button>
+          <button class="mode-btn" data-f="flick">Flick</button>
+          <button class="mode-btn" data-f="track">Tracking</button>
+        </div>
+        <div class="spacer"></div>
+        <button class="ctrl-btn" id="anClose">닫기</button>
+      </div>
+      <div id="anBody"></div>
+      <div class="row-actions">
+        <button class="ctrl-btn danger" id="anClear">기록 전체 삭제</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const arena = document.getElementById('arena');
+  const overlay = document.getElementById('overlay');
+  const analysis = document.getElementById('analysis');
+  const el = id => document.getElementById(id);
+  const ui = {
+    time: el('sTime'), score: el('sScore'), hits: el('sHits'),
+    miss: el('sMiss'), acc: el('sAcc'), rt: el('sRt'),
+    ovTitle: el('ovTitle'), ovText: el('ovText'), ovResult: el('ovResult'),
+  };
+
+  const STORE_KEY = 'solAimStats.v1';
+  let mode = 'grid', running = false;
+  let W = 0, H = 0, DPR = 1;
+  const cfg = { size: 38, speed: 5, duration: 60 };
+  const state = {
+    targets: [], score: 0, hits: 0, miss: 0, rtSum: 0, rtCount: 0,
+    timeLeft: 60, endAt: 0, trackTime: 0, lastTs: 0,
+  };
+  const mouse = { x: 0, y: 0, inside: false };
+
+  // ---------- storage ----------
+  function loadRecords() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }
+    catch { return []; }
+  }
+  function saveRecord(rec) {
+    const recs = loadRecords();
+    recs.push(rec);
+    localStorage.setItem(STORE_KEY, JSON.stringify(recs));
+  }
+
+  // ---------- sizing ----------
+  function resize() {
+    DPR = window.devicePixelRatio || 1;
+    W = arena.clientWidth; H = arena.clientHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+  function makeTarget() {
+    const r = cfg.size;
+    const t = { x: rand(r, W - r), y: rand(r, H - r), r, vx: 0, vy: 0, born: performance.now() };
+    if (mode === 'track') {
+      const sp = cfg.speed * 22, ang = rand(0, Math.PI * 2);
+      t.vx = Math.cos(ang) * sp; t.vy = Math.sin(ang) * sp;
+    }
+    return t;
+  }
+  function spawnInitial() {
+    state.targets = [];
+    if (mode === 'grid') {
+      const n = 3 + Math.round(cfg.speed / 3);
+      for (let i = 0; i < n; i++) state.targets.push(makeTarget());
+    } else {
+      state.targets.push(makeTarget());
+    }
+  }
+
+  function start() {
+    analysis.classList.add('hidden');
+    resize();
+    cfg.size = +el('sizeRange').value;
+    cfg.speed = +el('speedRange').value;
+    cfg.duration = +el('durSelect').value;
+    Object.assign(state, { score:0, hits:0, miss:0, rtSum:0, rtCount:0, trackTime:0, timeLeft: cfg.duration });
+    state.endAt = performance.now() + cfg.duration * 1000;
+    state.lastTs = performance.now();
+    spawnInitial();
+    running = true;
+    overlay.classList.add('hidden');
+    updateStats();
+    requestAnimationFrame(loop);
+  }
+
+  function end() {
+    running = false;
+    const acc = (state.hits + state.miss) > 0 ? (state.hits/(state.hits+state.miss)*100) : 100;
+    const rt = state.rtCount ? Math.round(state.rtSum/state.rtCount) : 0;
+    const perMin = state.score / (cfg.duration/60);
+
+    // build + persist record
+    const rec = {
+      t: Date.now(), mode, duration: cfg.duration, size: cfg.size, speed: cfg.speed,
+      score: state.score, perMin: Math.round(perMin),
+      hits: state.hits, miss: state.miss, acc: +acc.toFixed(1),
+      rt, trackTime: +state.trackTime.toFixed(1),
+    };
+    // compute improvement vs prior average of same mode BEFORE saving
+    const prior = loadRecords().filter(r => r.mode === mode);
+    const priorAvg = prior.length ? prior.reduce((s,r)=>s+r.score,0)/prior.length : null;
+    saveRecord(rec);
+
+    ui.ovTitle.textContent = '결과';
+    ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${cfg.duration}s · 크기 ${cfg.size} · 속도 ${cfg.speed}`;
+    let rows = '';
+    const add = (l, v) => rows += `<div class="rl">${l}</div><div class="rv">${v}</div>`;
+    add('점수', state.score);
+    add('분당 점수', Math.round(perMin));
+    if (mode !== 'track') {
+      add('명중 / 놓침', `${state.hits} / ${state.miss}`);
+      add('정확도', acc.toFixed(1) + '%');
+      add('평균 반응', rt ? rt + ' ms' : '—');
+    } else {
+      add('추적 시간', state.trackTime.toFixed(1) + ' s');
+      add('추적 비율', (state.trackTime/cfg.duration*100).toFixed(1) + '%');
+    }
+    if (priorAvg !== null) {
+      const dPct = ((rec.score - priorAvg) / Math.max(1, priorAvg)) * 100;
+      const cls = dPct >= 0 ? 'delta-up' : 'delta-down';
+      const sign = dPct >= 0 ? '▲' : '▼';
+      add(`이전 평균(${prior.length}판)`, `<span class="${cls}">${sign} ${Math.abs(dPct).toFixed(1)}%</span>`);
+    } else {
+      add('기록', '첫 판 저장됨');
+    }
+    ui.ovResult.innerHTML = `<div class="result-grid">${rows}</div>`;
+    el('startBtn').textContent = '다시 시작';
+    overlay.classList.remove('hidden');
+  }
+
+  function loop(ts) {
+    if (!running) return;
+    const dt = Math.min(0.05, (ts - state.lastTs)/1000);
+    state.lastTs = ts;
+    state.timeLeft = Math.max(0, (state.endAt - ts)/1000);
+    if (state.timeLeft <= 0) { draw(); updateStats(); end(); return; }
+
+    if (mode === 'track') {
+      const t = state.targets[0];
+      if (t) {
+        t.x += t.vx*dt; t.y += t.vy*dt;
+        if (t.x < t.r){ t.x=t.r; t.vx*=-1; } if (t.x > W-t.r){ t.x=W-t.r; t.vx*=-1; }
+        if (t.y < t.r){ t.y=t.r; t.vy*=-1; } if (t.y > H-t.r){ t.y=H-t.r; t.vy*=-1; }
+        const d = Math.hypot(mouse.x - t.x, mouse.y - t.y);
+        if (mouse.inside && d <= t.r) { state.trackTime += dt; state.score += Math.round(dt*100); }
+      }
+    }
+    draw(); updateStats();
+    requestAnimationFrame(loop);
+  }
+
+  function draw() {
+    ctx.clearRect(0,0,W,H);
+    for (const t of state.targets) {
+      const on = mode==='track' && mouse.inside && Math.hypot(mouse.x-t.x, mouse.y-t.y) <= t.r;
+      ctx.beginPath(); ctx.arc(t.x,t.y,t.r,0,Math.PI*2); ctx.fillStyle = on?'#3fb950':'#f85149'; ctx.fill();
+      ctx.beginPath(); ctx.arc(t.x,t.y,t.r*0.55,0,Math.PI*2); ctx.fillStyle='#0d1117'; ctx.fill();
+      ctx.beginPath(); ctx.arc(t.x,t.y,t.r*0.28,0,Math.PI*2); ctx.fillStyle = on?'#3fb950':'#f85149'; ctx.fill();
+    }
+  }
+
+  function localPos(e) {
+    const rect = cv.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+  arena.addEventListener('mousemove', e => { const p=localPos(e); mouse.x=p.x; mouse.y=p.y; mouse.inside=true; });
+  arena.addEventListener('mouseleave', () => mouse.inside=false);
+  arena.addEventListener('mousedown', e => {
+    if (!running || mode==='track' || e.button!==0) return;
+    const p = localPos(e);
+    let hit = -1;
+    for (let i=state.targets.length-1; i>=0; i--) {
+      const t = state.targets[i];
+      if (Math.hypot(p.x-t.x, p.y-t.y) <= t.r) { hit=i; break; }
+    }
+    if (hit >= 0) {
+      const t = state.targets[hit];
+      const rt = performance.now() - t.born;
+      state.rtSum += rt; state.rtCount++; state.hits++;
+      state.score += 100 + Math.max(0, Math.round((1000-rt)/10));
+      state.targets.splice(hit,1); state.targets.push(makeTarget());
+    } else {
+      state.miss++; state.score = Math.max(0, state.score-25);
+    }
+  });
+
+  function updateStats() {
+    ui.time.textContent = state.timeLeft.toFixed(1);
+    ui.score.textContent = state.score;
+    ui.hits.textContent = state.hits;
+    ui.miss.textContent = state.miss;
+    const tot = state.hits + state.miss;
+    ui.acc.textContent = (tot ? (state.hits/tot*100) : 100).toFixed(0) + '%';
+    ui.rt.textContent = state.rtCount ? Math.round(state.rtSum/state.rtCount) : '—';
+  }
+  const modeName = m => ({grid:'Gridshot', flick:'Flick', track:'Tracking'}[m]);
+
+  // ---------- analysis view ----------
+  let anFilter = 'all';
+  function fmtDate(t) {
+    const d = new Date(t);
+    const p = n => String(n).padStart(2,'0');
+    return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function avg(arr, key) { return arr.length ? arr.reduce((s,r)=>s+r[key],0)/arr.length : 0; }
+
+  function drawSpark(canvas, values, color) {
+    const c = canvas.getContext('2d');
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * devicePixelRatio; canvas.height = h * devicePixelRatio;
+    c.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    c.clearRect(0,0,w,h);
+    if (values.length === 0) return;
+    const pad = 8;
+    const mn = Math.min(...values), mx = Math.max(...values);
+    const range = (mx - mn) || 1;
+    const x = i => pad + (values.length===1 ? (w-2*pad)/2 : i/(values.length-1)*(w-2*pad));
+    const y = v => h - pad - (v - mn)/range*(h-2*pad);
+    // baseline grid
+    c.strokeStyle = '#21262d'; c.lineWidth = 1;
+    for (let g=0; g<=2; g++){ const gy = pad + g/2*(h-2*pad); c.beginPath(); c.moveTo(pad,gy); c.lineTo(w-pad,gy); c.stroke(); }
+    // line
+    c.strokeStyle = color; c.lineWidth = 2; c.beginPath();
+    values.forEach((v,i)=>{ const px=x(i), py=y(v); i?c.lineTo(px,py):c.moveTo(px,py); });
+    c.stroke();
+    // points
+    c.fillStyle = color;
+    values.forEach((v,i)=>{ c.beginPath(); c.arc(x(i),y(v),2.5,0,Math.PI*2); c.fill(); });
+    // min/max labels
+    c.fillStyle = '#8b949e'; c.font = '10px sans-serif';
+    c.fillText(Math.round(mx), 4, pad+4); c.fillText(Math.round(mn), 4, h-2);
+  }
+
+  function renderAnalysis() {
+    const body = el('anBody');
+    let recs = loadRecords();
+    if (anFilter !== 'all') recs = recs.filter(r => r.mode === anFilter);
+    recs.sort((a,b)=>a.t-b.t);
+
+    if (recs.length === 0) {
+      body.innerHTML = `<div class="empty">아직 기록이 없어요. 한 판 플레이하면 여기에 추세가 쌓입니다.</div>`;
+      return;
+    }
+
+    const best = Math.max(...recs.map(r=>r.score));
+    const avgScore = avg(recs,'score');
+    const metricKey = anFilter === 'track' ? 'trackTime' : 'acc';
+    // improvement: last5 avg vs prior5 avg
+    let impr = null;
+    if (recs.length >= 4) {
+      const n = Math.min(5, Math.floor(recs.length/2));
+      const recent = recs.slice(-n), older = recs.slice(-2*n, -n);
+      const ra = avg(recent,'score'), oa = avg(older,'score');
+      if (oa > 0) impr = (ra-oa)/oa*100;
+    }
+    const imprHtml = impr===null ? '<span style="color:var(--muted)">데이터 부족</span>'
+      : `<span class="${impr>=0?'delta-up':'delta-down'}">${impr>=0?'▲':'▼'} ${Math.abs(impr).toFixed(1)}%</span>`;
+
+    body.innerHTML = `
+      <div class="sumrow">
+        <div class="s"><div class="l">판 수</div><div class="v">${recs.length}</div></div>
+        <div class="s"><div class="l">최고 점수</div><div class="v" style="color:var(--accent)">${best}</div></div>
+        <div class="s"><div class="l">평균 점수</div><div class="v">${Math.round(avgScore)}</div></div>
+        <div class="s"><div class="l">평균 ${anFilter==='track'?'추적(s)':'정확도'}</div><div class="v">${anFilter==='track'?avg(recs,'trackTime').toFixed(1):avg(recs,'acc').toFixed(0)+'%'}</div></div>
+        <div class="s"><div class="l">최근 추세</div><div class="v">${imprHtml}</div></div>
+      </div>
+      <div class="chartwrap">
+        <div class="chart-cap">점수 추세 (시간순, 왼쪽=과거 → 오른쪽=최근)</div>
+        <canvas class="spark" id="sparkScore"></canvas>
+      </div>
+      <table class="hist">
+        <thead><tr><th>날짜</th><th>모드</th><th>점수</th><th>정확도</th><th>반응ms</th></tr></thead>
+        <tbody>
+          ${recs.slice().reverse().slice(0,12).map(r=>`
+            <tr>
+              <td>${fmtDate(r.t)}</td>
+              <td>${modeName(r.mode)}</td>
+              <td>${r.score}</td>
+              <td>${r.mode==='track' ? r.trackTime+'s' : r.acc+'%'}</td>
+              <td>${r.rt || '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+    drawSpark(el('sparkScore'), recs.map(r=>r.score), '#58a6ff');
+  }
+
+  function openAnalysis() {
+    running = false;
+    overlay.classList.add('hidden');
+    analysis.classList.remove('hidden');
+    renderAnalysis();
+  }
+  function closeAnalysis() {
+    analysis.classList.add('hidden');
+    overlay.classList.remove('hidden');
+  }
+
+  // ---------- wiring ----------
+  el('modes').addEventListener('click', e => {
+    const btn = e.target.closest('.mode-btn'); if (!btn) return;
+    [...el('modes').querySelectorAll('.mode-btn')].forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active'); mode = btn.dataset.mode;
+    running = false;
+    analysis.classList.add('hidden');
+    ui.ovTitle.textContent = modeName(mode); ui.ovResult.innerHTML='';
+    el('startBtn').textContent = '시작 (클릭)';
+    overlay.classList.remove('hidden');
+  });
+  el('anTabs').addEventListener('click', e => {
+    const btn = e.target.closest('.mode-btn'); if (!btn) return;
+    [...el('anTabs').querySelectorAll('.mode-btn')].forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active'); anFilter = btn.dataset.f; renderAnalysis();
+  });
+  el('startBtn').addEventListener('click', start);
+  el('restartBtn').addEventListener('click', start);
+  el('statsBtn').addEventListener('click', openAnalysis);
+  el('anClose').addEventListener('click', closeAnalysis);
+  el('anClear').addEventListener('click', () => {
+    if (confirm('저장된 기록을 모두 삭제할까요? 되돌릴 수 없습니다.')) {
+      localStorage.removeItem(STORE_KEY); renderAnalysis();
+    }
+  });
+  el('sizeRange').addEventListener('input', e => cfg.size = +e.target.value);
+  el('speedRange').addEventListener('input', e => cfg.speed = +e.target.value);
+  window.addEventListener('keydown', e => {
+    if (!analysis.classList.contains('hidden')) { if (e.key==='Escape') closeAnalysis(); return; }
+    if (e.code === 'Space') { e.preventDefault(); start(); }
+    if (e.key==='r' || e.key==='R') start();
+  });
+
+  resize();
+})();
+</script>
+</body>
+</html>
