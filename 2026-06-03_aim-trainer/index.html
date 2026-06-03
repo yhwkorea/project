@@ -91,6 +91,7 @@
   <h1>SOL · AIM</h1>
   <div class="modes" id="modes">
     <button class="mode-btn" data-mode="react">Reaction</button>
+    <button class="mode-btn" data-mode="precision">Precision</button>
     <button class="mode-btn active" data-mode="grid">Gridshot</button>
     <button class="mode-btn" data-mode="flick">Flick</button>
     <button class="mode-btn" data-mode="track">Tracking</button>
@@ -110,7 +111,7 @@
 </header>
 
 <div class="stats">
-  <div class="stat"><div class="label">남은 시간</div><div class="value" id="sTime">60.0</div></div>
+  <div class="stat"><div class="label" id="lblTime">남은 시간</div><div class="value" id="sTime">60.0</div></div>
   <div class="stat"><div class="label">점수</div><div class="value" id="sScore" style="color:var(--accent)">0</div></div>
   <div class="stat"><div class="label">명중</div><div class="value" id="sHits">0</div></div>
   <div class="stat"><div class="label">놓침</div><div class="value" id="sMiss" style="color:var(--bad)">0</div></div>
@@ -182,6 +183,8 @@
     phase: 'show', showAt: 0, bestRt: Infinity, under300: 0, lastRt: 0, lastFake: false, fakes: 0,
     // cursor-trajectory tracking
     trail: [], trials: [], lastTrail: [], showMouse: { x: 0, y: 0 },
+    // precision(느린 학습) 모드
+    targetGoal: 25, clean: 0, lastClean: 0,
   };
   const mouse = { x: 0, y: 0, inside: false };
 
@@ -250,6 +253,10 @@
       for (let i=0;i<n;i++) state.targets.push(makeTarget());
     } else if (mode === 'react') {
       scheduleReact(now);
+    } else if (mode === 'precision') {
+      state.targets.push(makeTarget());
+      state.showMouse = { x: mouse.x, y: mouse.y };
+      state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: now }] : [];
     } else {
       state.targets.push(makeTarget());
       if (mode === 'flick') { state.showMouse = { x: mouse.x, y: mouse.y }; state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: now }] : []; }
@@ -267,7 +274,9 @@
       score:0, hits:0, miss:0, rtSum:0, rtCount:0, trackTime:0, timeLeft: cfg.duration,
       phase:'show', showAt:0, bestRt: Infinity, under300:0, lastRt:0, lastFake:false, fakes:0,
       trail:[], trials:[], lastTrail:[], showMouse:{x:0,y:0},
+      clean:0, lastClean:0,
     });
+    state.targetGoal = 25;
     state.endAt = now + cfg.duration*1000;
     state.lastTs = now;
     spawnInitial(now);
@@ -297,6 +306,7 @@
       avgRd: Math.round(tavg('rd')), avgMt: Math.round(tavg('mt')),
       avgEff: +tavg('eff').toFixed(2), overRate, avgDist: Math.round(tavg('dist')),
       avgReach: +tavg('reach').toFixed(2),
+      clean: state.clean||0,
     };
     const prior = loadRecords().filter(r => r.mode === mode);
     const priorAvg = prior.length ? prior.reduce((s,r)=>s+r.score,0)/prior.length : null;
@@ -306,11 +316,26 @@
     fetch('/log', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(rec) }).catch(()=>{});
 
     ui.ovTitle.textContent = '결과';
-    ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${cfg.duration}s · 크기 ${cfg.size}${mode==='react'?' · 무작위 위치':' · 속도 '+cfg.speed}`;
+    ui.ovText.innerHTML = `<b>${modeName(mode)}</b> · ${mode==='precision'?state.targetGoal+'타겟':cfg.duration+'s'} · 크기 ${cfg.size}${mode==='react'?' · 무작위 위치':(mode==='precision'?' · 정밀(느린 학습)':' · 속도 '+cfg.speed)}`;
     let rows = '';
     const add = (l,v) => rows += `<div class="rl">${l}</div><div class="rv">${v}</div>`;
 
-    if (mode === 'react') {
+    if (mode === 'precision') {
+      const clean = state.clean||0, total = state.hits;
+      const cleanPct = total ? Math.round(clean/total*100) : 0;
+      add('완료 타겟', total);
+      add('클린 명중', `${clean} / ${total} (${cleanPct}%)`);
+      add('경로 효율', `${Math.round(tavg('eff')*100)}%`);
+      add('오버슈팅', `${overRate}%`);
+      add('빗맞힘', state.miss);
+      add('평균 속도(참고)', rt ? `${rt} ms` : '—');
+      const priorC = prior.filter(r=>r.clean!==undefined && r.hits>0);
+      if (priorC.length) {
+        const pAvg = priorC.reduce((s,r)=>s+(r.clean/r.hits*100),0)/priorC.length;
+        const d = cleanPct - pAvg;
+        add(`이전 클린율(${priorC.length}판)`, `<span class="${d>=0?'delta-up':'delta-down'}">${d>=0?'▲ ':'▼ '}${Math.abs(d).toFixed(0)}%p</span>`);
+      }
+    } else if (mode === 'react') {
       const total = state.hits;
       const pct = total ? Math.round(state.under300/total*100) : 0;
       add('시도(명중)', total);
@@ -367,8 +392,12 @@
     if (!running) return;
     const dt = Math.min(0.05, (ts - state.lastTs)/1000);
     state.lastTs = ts;
-    state.timeLeft = Math.max(0, (state.endAt - ts)/1000);
-    if (state.timeLeft <= 0) { draw(); updateStats(); end(); return; }
+    if (mode === 'precision') {
+      if (state.hits >= state.targetGoal) { draw(); updateStats(); end(); return; }
+    } else {
+      state.timeLeft = Math.max(0, (state.endAt - ts)/1000);
+      if (state.timeLeft <= 0) { draw(); updateStats(); end(); return; }
+    }
 
     if (mode === 'react') {
       if (state.phase === 'wait' && ts >= state.showAt) {
@@ -425,12 +454,31 @@
       }
       ctx.textAlign = 'start';
     }
+    if (mode === 'precision' && running) {
+      if (state.lastTrail && state.lastTrail.length > 1) {       // 직전 궤적 — 깔끔하면 초록, 거칠면 노랑
+        ctx.strokeStyle = state.lastClean ? 'rgba(63,185,80,.55)' : 'rgba(210,153,34,.6)';
+        ctx.lineWidth = 2; ctx.beginPath();
+        state.lastTrail.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+        ctx.stroke();
+        const s0 = state.lastTrail[0];
+        ctx.fillStyle = '#58a6ff'; ctx.beginPath(); ctx.arc(s0.x,s0.y,4,0,Math.PI*2); ctx.fill();
+      }
+      ctx.textAlign = 'center';
+      if (state.lastTrail && state.lastTrail.length) {
+        ctx.fillStyle = state.lastClean ? '#3fb950' : '#d29922';
+        ctx.font = '700 30px sans-serif';
+        ctx.fillText(state.lastClean ? '깔끔! ✓' : '지나침 — 천천히', W/2, 56);
+      }
+      ctx.fillStyle = '#8b949e'; ctx.font = '600 15px sans-serif';
+      ctx.fillText('서두르지 말고 한 번에 멈춰서 클릭', W/2, H - 26);
+      ctx.textAlign = 'start';
+    }
   }
 
   function localPos(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX-r.left, y: e.clientY-r.top }; }
   arena.addEventListener('mousemove', e => {
     const p=localPos(e); mouse.x=p.x; mouse.y=p.y; mouse.inside=true;
-    if (running && (mode==='flick' || (mode==='react' && state.phase==='show'))) state.trail.push({ x:p.x, y:p.y, t: performance.now() });
+    if (running && (mode==='flick' || mode==='precision' || (mode==='react' && state.phase==='show'))) state.trail.push({ x:p.x, y:p.y, t: performance.now() });
   });
   arena.addEventListener('mouseleave', () => mouse.inside=false);
   arena.addEventListener('mousedown', e => {
@@ -463,6 +511,25 @@
       return;
     }
 
+    if (mode === 'precision') {
+      const t = state.targets[0];
+      if (t && Math.hypot(p.x-t.x, p.y-t.y) <= t.r) {
+        const now2 = performance.now();
+        const m = trialMetrics(t, now2);
+        state.trials.push(m); state.lastTrail = state.trail.slice();
+        state.lastClean = (m.over === 0 && m.eff >= 0.8) ? 1 : 0;  // 한 번에 깔끔하게 멈췄나
+        if (state.lastClean) state.clean++;
+        state.rtSum += now2 - t.born; state.rtCount++; state.hits++;
+        state.score += state.lastClean ? 100 : 40;
+        state.targets = [ makeTarget() ];
+        state.showMouse = { x: mouse.x, y: mouse.y };
+        state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: now2 }] : [];
+      } else {
+        state.miss++;
+      }
+      return;
+    }
+
     // grid / flick
     let hit = -1;
     for (let i=state.targets.length-1;i>=0;i--) {
@@ -490,7 +557,7 @@
   });
 
   function updateStats() {
-    ui.time.textContent = state.timeLeft.toFixed(1);
+    ui.time.textContent = mode==='precision' ? String(Math.max(0, state.targetGoal - state.hits)) : state.timeLeft.toFixed(1);
     ui.score.textContent = state.score;
     ui.hits.textContent = state.hits;
     ui.miss.textContent = state.miss;
@@ -499,7 +566,7 @@
     ui.rt.textContent = state.rtCount ? Math.round(state.rtSum/state.rtCount) : '—';
     ui.u3.textContent = state.under300;
   }
-  const modeName = m => ({react:'Reaction', grid:'Gridshot', flick:'Flick', track:'Tracking'}[m]);
+  const modeName = m => ({react:'Reaction', precision:'Precision', grid:'Gridshot', flick:'Flick', track:'Tracking'}[m]);
   // reach 비율 → 감도 진단 [문구, css클래스]
   function sensDiag(reach) {
     if (!reach) return ['—', ''];
@@ -636,6 +703,7 @@
     [...el('modes').querySelectorAll('.mode-btn')].forEach(b=>b.classList.remove('active'));
     btn.classList.add('active'); mode = btn.dataset.mode; running = false;
     analysis.classList.add('hidden');
+    el('lblTime').textContent = mode==='precision' ? '남은 타겟' : '남은 시간';
     ui.ovTitle.textContent = modeName(mode); ui.ovResult.innerHTML='';
     el('startBtn').textContent = '시작 (클릭)';
     overlay.classList.remove('hidden');
