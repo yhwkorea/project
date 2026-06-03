@@ -227,7 +227,20 @@
     let maxFromStart = 0;
     for (const p of trail) maxFromStart = Math.max(maxFromStart, Math.hypot(p.x - sx, p.y - sy));
     const over = maxFromStart > dist + t.r ? 1 : 0;            // 타겟 너머로 지나침
-    return { rd: Math.round(rd), mt: Math.round(mt), dist: Math.round(dist), eff: +eff.toFixed(2), over };
+    // 감도 진단: 타겟 방향으로 처음 멈춘(감속) 지점의 도달 비율. >1 오버슈팅(감도↑) / <1 언더슈팅(감도↓)
+    let reach = 1;
+    if (dist > 1 && trail.length >= 3) {
+      const ux = (t.x - sx) / dist, uy = (t.y - sy) / dist;   // 타겟 방향 단위벡터
+      let projPrev = -Infinity, maxProj = 0, reachAbs = null;
+      for (let i = 0; i < trail.length; i++) {
+        const proj = (trail[i].x - sx) * ux + (trail[i].y - sy) * uy; // 타겟방향 진행거리
+        if (i > 1 && proj < projPrev - 2 && reachAbs === null) { reachAbs = projPrev; break; } // 첫 후퇴 = 감속점
+        projPrev = proj; if (proj > maxProj) maxProj = proj;
+      }
+      if (reachAbs === null) reachAbs = maxProj;               // 후퇴 없이 도달
+      reach = +(Math.max(0, reachAbs) / dist).toFixed(2);
+    }
+    return { rd: Math.round(rd), mt: Math.round(mt), dist: Math.round(dist), eff: +eff.toFixed(2), over, reach };
   }
 
   function spawnInitial(now) {
@@ -282,6 +295,7 @@
       bestRt: best, under300: state.under300, fakes: state.fakes,
       avgRd: Math.round(tavg('rd')), avgMt: Math.round(tavg('mt')),
       avgEff: +tavg('eff').toFixed(2), overRate, avgDist: Math.round(tavg('dist')),
+      avgReach: +tavg('reach').toFixed(2),
     };
     const prior = loadRecords().filter(r => r.mode === mode);
     const priorAvg = prior.length ? prior.reduce((s,r)=>s+r.score,0)/prior.length : null;
@@ -308,6 +322,9 @@
         add('· 이동 시간', `${Math.round(tavg('mt'))} ms`);
         add('경로 효율', `${Math.round(tavg('eff')*100)}%`);
         add('오버슈팅', `${overRate}%`);
+        const rch = +tavg('reach').toFixed(2);
+        const [diag, dcls] = sensDiag(rch);
+        add('감도 진단', `<span class="${dcls}">${diag} (reach ${rch})</span>`);
       }
       if (rt) {
         const goalCls = rt <= 300 ? 'delta-up' : 'delta-down';
@@ -468,6 +485,13 @@
     ui.u3.textContent = state.under300;
   }
   const modeName = m => ({react:'Reaction', grid:'Gridshot', flick:'Flick', track:'Tracking'}[m]);
+  // reach 비율 → 감도 진단 [문구, css클래스]
+  function sensDiag(reach) {
+    if (!reach) return ['—', ''];
+    if (reach > 1.07) return ['오버슈팅 우세 → 감도 낮추기', 'delta-down'];
+    if (reach < 0.93) return ['언더슈팅 우세 → 감도 높이기', 'delta-down'];
+    return ['적정 ✓', 'delta-up'];
+  }
 
   // ---------- analysis ----------
   let anFilter = 'all';
@@ -536,6 +560,9 @@
           <div class="s"><div class="l">오버슈팅</div><div class="v">${withTraj.length?Math.round(avg(withTraj,'overRate'))+'%':'—'}</div></div>
           <div class="s"><div class="l">평균 이동거리</div><div class="v">${withTraj.length?Math.round(avg(withTraj,'avgDist'))+'px':'—'}</div></div>
         </div>
+        ${(() => { const wr = withTraj.filter(r=>r.avgReach!==undefined); if(!wr.length) return '';
+          const rch = +avg(wr,'avgReach').toFixed(2); const [diag,dcls]=sensDiag(rch);
+          return `<div class="chart-cap" style="margin:0 0 10px"><b>감도 진단:</b> <span class="${dcls}">${diag}</span> — 평균 reach ${rch} (>1 오버슈팅·감도↑ / <1 언더슈팅·감도↓)</div>`; })()}
         <div class="chartwrap">
           <div class="chart-cap">반응시간 추세 (왼쪽=과거 → 오른쪽=최근, <b>아래로 내려갈수록 빠름=개선</b>)</div>
           <canvas class="spark" id="sparkRt"></canvas>
