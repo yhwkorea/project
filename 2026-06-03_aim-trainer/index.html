@@ -194,6 +194,7 @@
     kite: null,
   };
   const mouse = { x: 0, y: 0, inside: false };
+  let aHeld = false;   // kite: A키(attack-move) 누름 상태
 
   function loadRecords() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch { return []; } }
   function saveRecord(rec) { const r = loadRecords(); r.push(rec); localStorage.setItem(STORE_KEY, JSON.stringify(r)); }
@@ -578,7 +579,7 @@
       ctx.fillStyle = k.invuln>0?'#8b949e':'#58a6ff';                       // 플레이어
       ctx.beginPath(); ctx.arc(k.px,k.py,16,0,Math.PI*2); ctx.fill();
       ctx.textAlign='center'; ctx.fillStyle='#8b949e'; ctx.font='600 14px sans-serif';
-      ctx.fillText('노란 적=공격 가능 (클릭) · 빈 곳 클릭=이동 · 쿨다운 중엔 도망쳐!', W/2, H-22);
+      ctx.fillText('우클릭=이동 · A+좌클릭=공격(노랑일 때) · 공격 후 쿨다운엔 우클릭으로 도망', W/2, H-22);
       ctx.textAlign='start';
     }
   }
@@ -589,10 +590,23 @@
     if (running && (mode==='flick' || mode==='precision' || (mode==='react' && state.phase==='show'))) state.trail.push({ x:p.x, y:p.y, t: performance.now() });
   });
   arena.addEventListener('mouseleave', () => mouse.inside=false);
+  arena.addEventListener('contextmenu', e => e.preventDefault());   // 우클릭 메뉴 차단
   arena.addEventListener('mousedown', e => {
-    if (!running || e.button!==0) return;
-    if (mode === 'track') return;
+    if (!running) return;
     const p = localPos(e);
+
+    if (mode === 'kite') {
+      const k = state.kite; const now2 = performance.now();
+      if (e.button === 2) { k.tx = p.x; k.ty = p.y; }                  // 우클릭 = 이동
+      else if (e.button === 0 && aHeld) {                              // A + 좌클릭 = 공격(attack-move)
+        const pToE = Math.hypot(k.px-k.ex, k.py-k.ey);
+        if (pToE <= 200 && now2-k.lastAtk >= 600) { k.ehp-=34; k.lastAtk=now2; k.atk++; k.tx=k.px; k.ty=k.py; }
+        else { k.tx=k.ex; k.ty=k.ey; }                                // 사거리 밖 → 적에게 접근
+      }
+      return;
+    }
+
+    if (e.button!==0 || mode === 'track') return;
 
     if (mode === 'react') {
       const now = performance.now();
@@ -636,16 +650,6 @@
       } else {
         state.miss++;
       }
-      return;
-    }
-
-    if (mode === 'kite') {
-      const k = state.kite; const now2 = performance.now();
-      const dToE = Math.hypot(p.x-k.ex, p.y-k.ey), pToE = Math.hypot(k.px-k.ex, k.py-k.ey);
-      if (dToE <= 34) {                                        // 적 클릭
-        if (pToE <= 200 && now2-k.lastAtk >= 600) { k.ehp-=34; k.lastAtk=now2; k.atk++; k.tx=k.px; k.ty=k.py; } // 사거리+쿨다운 OK → 공격
-        else { k.tx=k.ex; k.ty=k.ey; }                        // 사거리 밖/쿨다운 → 적에게 접근
-      } else { k.tx=p.x; k.ty=p.y; }                          // 빈 곳 → 이동
       return;
     }
 
@@ -878,10 +882,12 @@
   el('sizeRange').addEventListener('input', e => cfg.size = +e.target.value);
   el('speedRange').addEventListener('input', e => cfg.speed = +e.target.value);
   window.addEventListener('keydown', e => {
+    if (e.code === 'KeyA') aHeld = true;
     if (!analysis.classList.contains('hidden')) { if (e.key==='Escape') closeAnalysis(); return; }
     if (e.code === 'Space') { e.preventDefault(); start(); }
     if (e.key==='r' || e.key==='R') start();
   });
+  window.addEventListener('keyup', e => { if (e.code === 'KeyA') aHeld = false; });
 
   resize();
 })();
