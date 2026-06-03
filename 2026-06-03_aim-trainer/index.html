@@ -252,6 +252,7 @@
       scheduleReact(now);
     } else {
       state.targets.push(makeTarget());
+      if (mode === 'flick') { state.showMouse = { x: mouse.x, y: mouse.y }; state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: now }] : []; }
     }
   }
 
@@ -342,6 +343,11 @@
         add('명중 / 놓침', `${state.hits} / ${state.miss}`);
         add('정확도', acc.toFixed(1)+'%');
         add('평균 반응', rt ? rt+' ms' : '—');
+        if (mode === 'flick' && tr.length) {
+          add('· 이동 시간', `${Math.round(tavg('mt'))} ms`);
+          add('경로 효율', `${Math.round(tavg('eff')*100)}%`);
+          add('오버슈팅', `${overRate}%`);
+        }
       } else {
         add('추적 시간', state.trackTime.toFixed(1)+' s');
         add('추적 비율', (state.trackTime/cfg.duration*100).toFixed(1)+'%');
@@ -424,7 +430,7 @@
   function localPos(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX-r.left, y: e.clientY-r.top }; }
   arena.addEventListener('mousemove', e => {
     const p=localPos(e); mouse.x=p.x; mouse.y=p.y; mouse.inside=true;
-    if (running && mode==='react' && state.phase==='show') state.trail.push({ x:p.x, y:p.y, t: performance.now() });
+    if (running && (mode==='flick' || (mode==='react' && state.phase==='show'))) state.trail.push({ x:p.x, y:p.y, t: performance.now() });
   });
   arena.addEventListener('mouseleave', () => mouse.inside=false);
   arena.addEventListener('mousedown', e => {
@@ -465,10 +471,19 @@
     }
     if (hit >= 0) {
       const t = state.targets[hit];
-      const rt = performance.now() - t.born;
+      const now2 = performance.now();
+      const rt = now2 - t.born;
+      if (mode === 'flick') {                            // 다양한 위치 간 이동 품질 측정
+        state.trials.push(trialMetrics(t, now2));
+        state.lastTrail = state.trail.slice();
+      }
       state.rtSum += rt; state.rtCount++; state.hits++;
       state.score += 100 + Math.max(0, Math.round((1000-rt)/10));
       state.targets.splice(hit,1); state.targets.push(makeTarget());
+      if (mode === 'flick') {                            // 다음 이동의 시작점 = 현재 커서 위치
+        state.showMouse = { x: mouse.x, y: mouse.y };
+        state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: now2 }] : [];
+      }
     } else {
       state.miss++; state.score = Math.max(0, state.score-25);
     }
