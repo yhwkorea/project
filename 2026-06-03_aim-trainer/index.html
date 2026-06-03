@@ -185,6 +185,8 @@
     trail: [], trials: [], lastTrail: [], showMouse: { x: 0, y: 0 },
     // precision(느린 학습) 모드
     targetGoal: 25, clean: 0, lastClean: 0,
+    // ballistic/corrective 시각화 (직전 궤적의 전환점 인덱스)
+    lastTransIdx: -1,
   };
   const mouse = { x: 0, y: 0, inside: false };
 
@@ -243,7 +245,31 @@
       if (reachAbs === null) reachAbs = maxProj;               // 후퇴 없이 도달
       reach = +(Math.max(0, reachAbs) / dist).toFixed(2);
     }
-    return { rd: Math.round(rd), mt: Math.round(mt), dist: Math.round(dist), eff: +eff.toFixed(2), over, reach };
+    // 속도 프로파일: ballistic(큰 빠른 이동, ≈팔) → corrective(미세 보정, ≈손목) 전환 찾기
+    let ballisticPct = 100, corrMs = 0, transIdx = -1;
+    if (dist > 1 && trail.length >= 4) {
+      const bx = (t.x - sx) / dist, by = (t.y - sy) / dist;
+      const vel = [];
+      for (let i = 1; i < trail.length; i++) {
+        const dd = Math.hypot(trail[i].x - trail[i-1].x, trail[i].y - trail[i-1].y);
+        const dtt = Math.max(1, trail[i].t - trail[i-1].t);
+        vel.push({ v: dd / dtt, t: trail[i].t, proj: (trail[i].x - sx) * bx + (trail[i].y - sy) * by, idx: i });
+      }
+      const vmax = Math.max(...vel.map(o => o.v));
+      if (vmax > 0) {
+        let peaked = false;
+        for (const o of vel) {
+          if (o.v >= vmax * 0.6) peaked = true;                 // 피크 가속 도달
+          if (peaked && o.v < vmax * 0.25) {                    // 큰 감속 = ballistic 종료
+            transIdx = o.idx;
+            ballisticPct = Math.round(Math.max(0, Math.min(130, o.proj / dist * 100)));
+            corrMs = Math.round(vel[vel.length-1].t - o.t);
+            break;
+          }
+        }
+      }
+    }
+    return { rd: Math.round(rd), mt: Math.round(mt), dist: Math.round(dist), eff: +eff.toFixed(2), over, reach, ballisticPct, corrMs, transIdx };
   }
 
   function spawnInitial(now) {
@@ -307,6 +333,7 @@
       avgEff: +tavg('eff').toFixed(2), overRate, avgDist: Math.round(tavg('dist')),
       avgReach: +tavg('reach').toFixed(2),
       clean: state.clean||0,
+      avgBallistic: Math.round(tavg('ballisticPct')), avgCorrMs: Math.round(tavg('corrMs')),
     };
     const prior = loadRecords().filter(r => r.mode === mode);
     const priorAvg = prior.length ? prior.reduce((s,r)=>s+r.score,0)/prior.length : null;
@@ -329,6 +356,13 @@
       add('오버슈팅', `${overRate}%`);
       add('빗맞힘', state.miss);
       add('평균 속도(참고)', rt ? `${rt} ms` : '—');
+      if (total) {
+        const bp = Math.round(tavg('ballisticPct'));
+        const [md, mc] = motionDiag(bp);
+        add('팔→손목', `<span class="${mc}">${md}</span>`);
+        add('· Ballistic 도달', `${bp}%`);
+        add('· 보정 시간', `${Math.round(tavg('corrMs'))} ms`);
+      }
       const priorC = prior.filter(r=>r.clean!==undefined && r.hits>0);
       if (priorC.length) {
         const pAvg = priorC.reduce((s,r)=>s+(r.clean/r.hits*100),0)/priorC.length;
@@ -351,6 +385,11 @@
         const rch = +tavg('reach').toFixed(2);
         const [diag, dcls] = sensDiag(rch);
         add('감도 진단', `<span class="${dcls}">${diag} (reach ${rch})</span>`);
+        const bp = Math.round(tavg('ballisticPct'));
+        const [md, mc] = motionDiag(bp);
+        add('팔→손목', `<span class="${mc}">${md}</span>`);
+        add('· Ballistic 도달', `${bp}%`);
+        add('· 보정 시간', `${Math.round(tavg('corrMs'))} ms`);
       }
       if (rt) {
         const goalCls = rt <= 300 ? 'delta-up' : 'delta-down';
@@ -372,6 +411,10 @@
           add('· 이동 시간', `${Math.round(tavg('mt'))} ms`);
           add('경로 효율', `${Math.round(tavg('eff')*100)}%`);
           add('오버슈팅', `${overRate}%`);
+          const bp = Math.round(tavg('ballisticPct'));
+          const [md, mc] = motionDiag(bp);
+          add('팔→손목', `<span class="${mc}">${md}</span>`);
+          add('· Ballistic 도달', `${bp}%`);
         }
       } else {
         add('추적 시간', state.trackTime.toFixed(1)+' s');
@@ -421,6 +464,23 @@
     requestAnimationFrame(loop);
   }
 
+  // 직전 궤적을 ballistic(파랑=팔)/corrective(주황=손목) 구간으로 색 구분 + 전환점 마커
+  function drawTrail() {
+    const tr = state.lastTrail, ti = state.lastTransIdx;
+    if (!tr || tr.length < 2) return;
+    const cut = (ti > 0 && ti < tr.length) ? ti : tr.length - 1;
+    ctx.strokeStyle = 'rgba(88,166,255,.75)'; ctx.lineWidth = 2.5; ctx.beginPath();
+    for (let i = 0; i <= cut; i++) { const p = tr[i]; i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y); }
+    ctx.stroke();
+    if (cut < tr.length - 1) {
+      ctx.strokeStyle = 'rgba(210,153,34,.9)'; ctx.lineWidth = 2.5; ctx.beginPath();
+      for (let i = cut; i < tr.length; i++) { const p = tr[i]; i === cut ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y); }
+      ctx.stroke();
+      const tp = tr[cut]; ctx.fillStyle = '#d29922'; ctx.beginPath(); ctx.arc(tp.x,tp.y,5,0,Math.PI*2); ctx.fill();
+    }
+    ctx.fillStyle = '#58a6ff'; ctx.beginPath(); ctx.arc(tr[0].x,tr[0].y,4,0,Math.PI*2); ctx.fill();
+  }
+
   function draw() {
     ctx.clearRect(0,0,W,H);
     for (const t of state.targets) {
@@ -431,13 +491,7 @@
       ctx.beginPath(); ctx.arc(t.x,t.y,t.r*0.28,0,Math.PI*2); ctx.fillStyle = col; ctx.fill();
     }
     if (mode === 'react' && running) {
-      if (state.lastTrail && state.lastTrail.length > 1) {     // 직전 명중 궤적 복기
-        ctx.strokeStyle = 'rgba(88,166,255,.45)'; ctx.lineWidth = 2; ctx.beginPath();
-        state.lastTrail.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
-        ctx.stroke();
-        const s0 = state.lastTrail[0];
-        ctx.fillStyle = '#58a6ff'; ctx.beginPath(); ctx.arc(s0.x,s0.y,4,0,Math.PI*2); ctx.fill();
-      }
+      drawTrail();   // 직전 궤적 — ballistic(파랑)/corrective(주황) 구분
       ctx.textAlign = 'center';
       if (state.phase === 'wait') {
         ctx.fillStyle = '#8b949e'; ctx.font = '600 22px sans-serif';
@@ -455,24 +509,18 @@
       ctx.textAlign = 'start';
     }
     if (mode === 'precision' && running) {
-      if (state.lastTrail && state.lastTrail.length > 1) {       // 직전 궤적 — 깔끔하면 초록, 거칠면 노랑
-        ctx.strokeStyle = state.lastClean ? 'rgba(63,185,80,.55)' : 'rgba(210,153,34,.6)';
-        ctx.lineWidth = 2; ctx.beginPath();
-        state.lastTrail.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
-        ctx.stroke();
-        const s0 = state.lastTrail[0];
-        ctx.fillStyle = '#58a6ff'; ctx.beginPath(); ctx.arc(s0.x,s0.y,4,0,Math.PI*2); ctx.fill();
-      }
+      drawTrail();   // ballistic(파랑=팔)/corrective(주황=손목) — 주황이 길면 손목 의존
       ctx.textAlign = 'center';
       if (state.lastTrail && state.lastTrail.length) {
         ctx.fillStyle = state.lastClean ? '#3fb950' : '#d29922';
         ctx.font = '700 30px sans-serif';
         ctx.fillText(state.lastClean ? '깔끔! ✓' : '지나침 — 천천히', W/2, 56);
       }
-      ctx.fillStyle = '#8b949e'; ctx.font = '600 15px sans-serif';
-      ctx.fillText('서두르지 말고 한 번에 멈춰서 클릭', W/2, H - 26);
+      ctx.fillStyle = '#8b949e'; ctx.font = '600 14px sans-serif';
+      ctx.fillText('파랑=큰 이동(팔) · 주황=미세 보정(손목) — 주황이 짧을수록 좋음', W/2, H - 26);
       ctx.textAlign = 'start';
     }
+    if (mode === 'flick' && running) drawTrail();
   }
 
   function localPos(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX-r.left, y: e.clientY-r.top }; }
@@ -497,7 +545,8 @@
       const t = state.targets[0];
       if (t && Math.hypot(p.x-t.x, p.y-t.y) <= t.r) {
         const rt = now - t.born;
-        state.trials.push(trialMetrics(t, now));
+        const mR = trialMetrics(t, now);
+        state.trials.push(mR); state.lastTransIdx = mR.transIdx;
         state.lastTrail = state.trail.slice();
         state.rtSum += rt; state.rtCount++; state.hits++;
         state.lastRt = Math.round(rt); state.lastFake = false;
@@ -516,7 +565,7 @@
       if (t && Math.hypot(p.x-t.x, p.y-t.y) <= t.r) {
         const now2 = performance.now();
         const m = trialMetrics(t, now2);
-        state.trials.push(m); state.lastTrail = state.trail.slice();
+        state.trials.push(m); state.lastTrail = state.trail.slice(); state.lastTransIdx = m.transIdx;
         state.lastClean = (m.over === 0 && m.eff >= 0.8) ? 1 : 0;  // 한 번에 깔끔하게 멈췄나
         if (state.lastClean) state.clean++;
         state.rtSum += now2 - t.born; state.rtCount++; state.hits++;
@@ -541,7 +590,8 @@
       const now2 = performance.now();
       const rt = now2 - t.born;
       if (mode === 'flick') {                            // 다양한 위치 간 이동 품질 측정
-        state.trials.push(trialMetrics(t, now2));
+        const mF = trialMetrics(t, now2);
+        state.trials.push(mF); state.lastTransIdx = mF.transIdx;
         state.lastTrail = state.trail.slice();
       }
       state.rtSum += rt; state.rtCount++; state.hits++;
@@ -573,6 +623,14 @@
     if (reach > 1.07) return ['오버슈팅 우세 → 감도 낮추기', 'delta-down'];
     if (reach < 0.93) return ['언더슈팅 우세 → 감도 높이기', 'delta-down'];
     return ['적정 ✓', 'delta-up'];
+  }
+  // ballistic 도달률(%) → 팔/손목 진단 [문구, css클래스]
+  function motionDiag(bpct) {
+    if (!bpct) return ['—', ''];
+    if (bpct > 108) return ['지나침→되돌림 (팔 과함)', 'delta-down'];
+    if (bpct >= 88) return ['팔 던지기 정확 ✓', 'delta-up'];
+    if (bpct >= 70) return ['팔 덜 던짐→손목 의존', 'delta-down'];
+    return ['팔 거의 안 씀→질질', 'delta-down'];
   }
 
   // ---------- analysis ----------
