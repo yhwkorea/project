@@ -180,6 +180,8 @@
     timeLeft: 60, endAt: 0, trackTime: 0, lastTs: 0,
     // reaction-specific
     phase: 'show', showAt: 0, bestRt: Infinity, under300: 0, lastRt: 0, lastFake: false, fakes: 0,
+    // cursor-trajectory tracking
+    trail: [], trials: [], lastTrail: [], showMouse: { x: 0, y: 0 },
   };
   const mouse = { x: 0, y: 0, inside: false };
 
@@ -211,6 +213,23 @@
   }
   function scheduleReact(now) { state.phase = 'wait'; state.targets = []; state.showAt = now + rand(700, 2600); }
 
+  // 한 번의 명중에 대한 커서 궤적 메트릭: 인지 지연 / 이동 시간 / 경로 효율 / 오버슈팅
+  function trialMetrics(t, now) {
+    const trail = state.trail, sx = state.showMouse.x, sy = state.showMouse.y;
+    const dist = Math.hypot(t.x - sx, t.y - sy);             // 출현 위치→타겟 직선거리
+    let firstMoveT = null;
+    for (const p of trail) { if (Math.hypot(p.x - sx, p.y - sy) > 5) { firstMoveT = p.t; break; } }
+    const rd = Math.max(0, (firstMoveT !== null ? firstMoveT : now) - t.born); // 인지 지연
+    const mt = Math.max(0, now - (firstMoveT !== null ? firstMoveT : now));     // 이동 시간
+    let pathLen = 0;
+    for (let i = 1; i < trail.length; i++) pathLen += Math.hypot(trail[i].x - trail[i-1].x, trail[i].y - trail[i-1].y);
+    const eff = pathLen > 3 ? Math.min(1, dist / pathLen) : 1; // 직선거리/실제경로
+    let maxFromStart = 0;
+    for (const p of trail) maxFromStart = Math.max(maxFromStart, Math.hypot(p.x - sx, p.y - sy));
+    const over = maxFromStart > dist + t.r ? 1 : 0;            // 타겟 너머로 지나침
+    return { rd: Math.round(rd), mt: Math.round(mt), dist: Math.round(dist), eff: +eff.toFixed(2), over };
+  }
+
   function spawnInitial(now) {
     state.targets = [];
     if (mode === 'grid') {
@@ -233,6 +252,7 @@
     Object.assign(state, {
       score:0, hits:0, miss:0, rtSum:0, rtCount:0, trackTime:0, timeLeft: cfg.duration,
       phase:'show', showAt:0, bestRt: Infinity, under300:0, lastRt:0, lastFake:false, fakes:0,
+      trail:[], trials:[], lastTrail:[], showMouse:{x:0,y:0},
     });
     state.endAt = now + cfg.duration*1000;
     state.lastTs = now;
@@ -250,6 +270,9 @@
     const rt = Math.round(avgRt);
     const best = state.bestRt === Infinity ? 0 : Math.round(state.bestRt);
     const perMin = state.score / (cfg.duration/60);
+    const tr = state.trials;
+    const tavg = k => tr.length ? tr.reduce((s,x)=>s+x[k],0)/tr.length : 0;
+    const overRate = tr.length ? Math.round(tr.reduce((s,x)=>s+x.over,0)/tr.length*100) : 0;
 
     const rec = {
       t: Date.now(), mode, duration: cfg.duration, size: cfg.size, speed: cfg.speed,
@@ -257,6 +280,8 @@
       hits: state.hits, miss: state.miss, acc: +acc.toFixed(1),
       rt, trackTime: +state.trackTime.toFixed(1),
       bestRt: best, under300: state.under300, fakes: state.fakes,
+      avgRd: Math.round(tavg('rd')), avgMt: Math.round(tavg('mt')),
+      avgEff: +tavg('eff').toFixed(2), overRate, avgDist: Math.round(tavg('dist')),
     };
     const prior = loadRecords().filter(r => r.mode === mode);
     const priorAvg = prior.length ? prior.reduce((s,r)=>s+r.score,0)/prior.length : null;
@@ -278,6 +303,12 @@
       add('최고(최저)', best ? `${best} ms` : '—');
       add('300ms↓ 달성', total ? `${state.under300} / ${total} (${pct}%)` : '—');
       add('성급한 클릭', state.fakes);
+      if (total) {
+        add('· 인지 지연', `${Math.round(tavg('rd'))} ms`);
+        add('· 이동 시간', `${Math.round(tavg('mt'))} ms`);
+        add('경로 효율', `${Math.round(tavg('eff')*100)}%`);
+        add('오버슈팅', `${overRate}%`);
+      }
       if (rt) {
         const goalCls = rt <= 300 ? 'delta-up' : 'delta-down';
         add('목표 300ms', `<span class="${goalCls}">${rt<=300?'✓ 달성':(rt-300)+'ms 초과'}</span>`);
@@ -320,6 +351,9 @@
       if (state.phase === 'wait' && ts >= state.showAt) {
         state.targets = [ makeReactTarget(ts) ];
         state.phase = 'show';
+        state.showMouse = { x: mouse.x, y: mouse.y };          // 출현 순간 커서 위치
+        state.trail = mouse.inside ? [{ x: mouse.x, y: mouse.y, t: ts }] : [];
+        state.lastTrail = [];
       }
     } else if (mode === 'track') {
       const t = state.targets[0];
@@ -345,6 +379,13 @@
       ctx.beginPath(); ctx.arc(t.x,t.y,t.r*0.28,0,Math.PI*2); ctx.fillStyle = col; ctx.fill();
     }
     if (mode === 'react' && running) {
+      if (state.lastTrail && state.lastTrail.length > 1) {     // 직전 명중 궤적 복기
+        ctx.strokeStyle = 'rgba(88,166,255,.45)'; ctx.lineWidth = 2; ctx.beginPath();
+        state.lastTrail.forEach((p,i)=> i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+        ctx.stroke();
+        const s0 = state.lastTrail[0];
+        ctx.fillStyle = '#58a6ff'; ctx.beginPath(); ctx.arc(s0.x,s0.y,4,0,Math.PI*2); ctx.fill();
+      }
       ctx.textAlign = 'center';
       if (state.phase === 'wait') {
         ctx.fillStyle = '#8b949e'; ctx.font = '600 22px sans-serif';
@@ -364,7 +405,10 @@
   }
 
   function localPos(e) { const r = cv.getBoundingClientRect(); return { x: e.clientX-r.left, y: e.clientY-r.top }; }
-  arena.addEventListener('mousemove', e => { const p=localPos(e); mouse.x=p.x; mouse.y=p.y; mouse.inside=true; });
+  arena.addEventListener('mousemove', e => {
+    const p=localPos(e); mouse.x=p.x; mouse.y=p.y; mouse.inside=true;
+    if (running && mode==='react' && state.phase==='show') state.trail.push({ x:p.x, y:p.y, t: performance.now() });
+  });
   arena.addEventListener('mouseleave', () => mouse.inside=false);
   arena.addEventListener('mousedown', e => {
     if (!running || e.button!==0) return;
@@ -382,6 +426,8 @@
       const t = state.targets[0];
       if (t && Math.hypot(p.x-t.x, p.y-t.y) <= t.r) {
         const rt = now - t.born;
+        state.trials.push(trialMetrics(t, now));
+        state.lastTrail = state.trail.slice();
         state.rtSum += rt; state.rtCount++; state.hits++;
         state.lastRt = Math.round(rt); state.lastFake = false;
         if (rt < state.bestRt) state.bestRt = rt;
@@ -461,6 +507,7 @@
     const isReact = anFilter === 'react';
     if (isReact) {
       const withRt = recs.filter(r=>r.rt>0);
+      const withTraj = recs.filter(r=>r.avgRd!==undefined && r.hits>0);
       const bestEver = withRt.length ? Math.min(...withRt.map(r=>r.rt)) : 0;
       const avgRt = avg(withRt,'rt');
       const u3rate = avg(recs.map(r=>({u: r.hits? r.under300/r.hits*100 : 0})),'u');
@@ -481,6 +528,13 @@
           <div class="s"><div class="l">300ms↓ 비율</div><div class="v">${Math.round(u3rate)}%</div></div>
           <div class="s"><div class="l">목표 300ms</div><div class="v"><span class="${goalCls}">${avgRt?(avgRt<=300?'✓':Math.round(avgRt-300)+'↑'):'—'}</span></div></div>
           <div class="s"><div class="l">추세</div><div class="v">${imprHtml}</div></div>
+        </div>
+        <div class="sumrow" style="border-top:1px solid var(--border);padding-top:12px">
+          <div class="s"><div class="l">인지 지연</div><div class="v">${withTraj.length?Math.round(avg(withTraj,'avgRd'))+'ms':'—'}</div></div>
+          <div class="s"><div class="l">이동 시간</div><div class="v">${withTraj.length?Math.round(avg(withTraj,'avgMt'))+'ms':'—'}</div></div>
+          <div class="s"><div class="l">경로 효율</div><div class="v">${withTraj.length?Math.round(avg(withTraj,'avgEff')*100)+'%':'—'}</div></div>
+          <div class="s"><div class="l">오버슈팅</div><div class="v">${withTraj.length?Math.round(avg(withTraj,'overRate'))+'%':'—'}</div></div>
+          <div class="s"><div class="l">평균 이동거리</div><div class="v">${withTraj.length?Math.round(avg(withTraj,'avgDist'))+'px':'—'}</div></div>
         </div>
         <div class="chartwrap">
           <div class="chart-cap">반응시간 추세 (왼쪽=과거 → 오른쪽=최근, <b>아래로 내려갈수록 빠름=개선</b>)</div>
